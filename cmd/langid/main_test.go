@@ -193,4 +193,22 @@ func TestBatchMode(t *testing.T) {
 			t.Errorf("unexpected row 2: %+v", row2)
 		}
 	})
+
+	t.Run("ignore-missing", func(t *testing.T) {
+		out, err := runCmd("--batch", "--ignore-missing")
+		if err != nil {
+			t.Fatalf("run cmd failed: %v", err)
+		}
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		// Since missingFile is ignored, we only expect 2 output lines (english.txt and french.txt).
+		if len(lines) != 2 {
+			t.Errorf("expected 2 lines of output, got %d:\n%s", len(lines), out)
+		}
+		if !strings.Contains(lines[0], "english.txt") {
+			t.Errorf("expected first line to contain english.txt, got: %q", lines[0])
+		}
+		if !strings.Contains(lines[1], "french.txt") {
+			t.Errorf("expected second line to contain french.txt, got: %q", lines[1])
+		}
+	})
 }

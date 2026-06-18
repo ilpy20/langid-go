@@ -82,18 +82,19 @@ func preprocessArgs(args []string) []string {
 
 func main() {
 	var (
-		modelPath string
-		mPath     string
-		lineMode  bool
-		batchMode bool
-		bMode     bool
-		langs     string
-		dist      bool
-		dMode     bool
-		normalize bool
-		nMode     bool
-		format    string
-		fFormat   string
+		modelPath     string
+		mPath         string
+		lineMode      bool
+		batchMode     bool
+		bMode         bool
+		langs         string
+		dist          bool
+		dMode         bool
+		normalize     bool
+		nMode         bool
+		format        string
+		fFormat       string
+		ignoreMissing bool
 	)
 
 	flag.StringVar(&modelPath, "model", "", "path to .lidg model (optional, uses default if omitted)")
@@ -108,6 +109,7 @@ func main() {
 	flag.BoolVar(&nMode, "n", false, "normalize confidence scores to probability values (0.0 to 1.0) (alias for -normalize)")
 	flag.StringVar(&format, "format", "classic", "output format for batch mode: classic, csv, or jsonl")
 	flag.StringVar(&fFormat, "f", "", "output format for batch mode: classic, csv, or jsonl (alias for -format)")
+	flag.BoolVar(&ignoreMissing, "ignore-missing", false, "silently skip missing or unreadable files in batch mode")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -118,6 +120,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  -d, --dist\n    \tshow full distribution over languages (rank mode)")
 		fmt.Fprintln(os.Stderr, "  -n, --normalize\n    \tnormalize confidence scores to probability values (0.0 to 1.0)")
 		fmt.Fprintln(os.Stderr, "  -f, --format string\n    \toutput format for batch mode: classic, csv, or jsonl (default \"classic\")")
+		fmt.Fprintln(os.Stderr, "      --ignore-missing\n    \tsilently skip missing or unreadable files in batch mode")
 	}
 
 	os.Args = append(os.Args[:1], preprocessArgs(os.Args[1:])...)
@@ -205,6 +208,9 @@ func main() {
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
+				if ignoreMissing {
+					continue
+				}
 				if actualFormat == "csv" {
 					if actualDist {
 						row := make([]string, len(classes)+1)
