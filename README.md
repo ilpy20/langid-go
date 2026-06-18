@@ -89,12 +89,18 @@ go build ./cmd/langid
 
 ```text
 Usage of langid:
-  -b        batch mode: treat stdin lines as file paths to classify
-  -d        show full distribution over languages (rank mode)
-  -l        line mode: classify each input line
-  -langs    comma-separated set of target ISO639 language codes (e.g en,de)
-  -model    path to .lidg model (optional, uses default if omitted)
-  -n        normalize confidence scores to probability values (0.0 to 1.0)
+  -m, -model string
+    	path to .lidg model (optional, uses default if omitted)
+  -l, --langs string
+    	comma-separated set of target ISO639 language codes (e.g en,de)
+      --line
+    	line mode: classify each input line (legacy alias: -l)
+  -b, --batch
+    	batch mode: treat stdin lines as file paths to classify
+  -d, --dist
+    	show full distribution over languages (rank mode)
+  -n, --normalize
+    	normalize confidence scores to probability values (0.0 to 1.0)
 ```
 
 ### Examples
@@ -105,22 +111,22 @@ $ ./langid -n <<< "Hello World"
 ('en', 1.0000)
 ```
 
-**Line Mode (`-l`):** Process pipes line-by-line rather than as a single document.
+**Line Mode (`--line` or `-l`):** Process pipes line-by-line rather than as a single document.
 ```bash
-$ printf "hello world\nbonjour tout le monde\n" | ./langid -l
+$ printf "hello world\nbonjour tout le monde\n" | ./langid --line
 ('en', -102.5)
 ('fr', -105.1)
 ```
 
-**Batch Mode (`-b`):** Treat lines as file paths, processing them in bulk. Useful with UNIX tools like `find`.
+**Batch Mode (`-b` / `--batch`):** Treat lines as file paths, processing them in bulk. Useful with UNIX tools like `find`.
 ```bash
 $ find . -name "*.md" | ./langid -b -n
 ./README.md,('en', 1.0000)
 ```
 
-**Language Subsetting (`-langs`):**
+**Language Subsetting (`-l` / `--langs`):**
 ```bash
-$ ./langid -n -langs en,it <<< "Io non parlo italiano"
+$ ./langid -n -l en,it <<< "Io non parlo italiano"
 ('it', 1.0000)
 ```
 
@@ -133,7 +139,7 @@ To use custom models in `langid.go`, you must convert them to the highly-optimiz
 ```bash
 python3 scripts/convert_model.py custom.model model/custom.lidg
 ```
-You can then load them in Go using `langid.LoadModel("model/custom.lidg")` or via the CLI with the `-model` flag.
+You can then load them in Go using `langid.LoadModel("model/custom.lidg")` or via the CLI with the `-m` flag.
 
 ## Acknowledgements and References
 
