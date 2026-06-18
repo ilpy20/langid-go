@@ -1,15 +1,29 @@
 package langid
 
 import (
-	"bufio"
 	"bytes"
+	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
+
+type pythonPrediction struct {
+	Text  string  `json:"text"`
+	Lang  string  `json:"lang"`
+	Score float64 `json:"score"`
+}
+
+type pythonReferenceResults struct {
+	Classes     []string           `json:"classes"`
+	NumLangs    int                `json:"num_langs"`
+	NumFeats    int                `json:"num_feats"`
+	NumStates   int                `json:"num_states"`
+	Predictions []pythonPrediction `json:"predictions"`
+}
 
 func TestParityWithLegacyModelReference(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
@@ -17,81 +31,123 @@ func TestParityWithLegacyModelReference(t *testing.T) {
 	}
 
 	root := moduleRoot(t)
-	legacyModel := filepath.Join(root, "..", "langid.c", "ldpy.model")
-	if _, err := os.Stat(legacyModel); err != nil {
-		t.Fatalf("missing legacy model %q: %v", legacyModel, err)
+	models := []struct {
+		name string
+		path string
+	}{
+		{
+			name: "ldpy",
+			path: filepath.Join(root, "..", "langid.c", "ldpy.model"),
+		},
+		{
+			name: "acquis",
+			path: filepath.Join(root, "..", "langid.c", "acquis.model"),
+		},
 	}
 
-	tmp := t.TempDir()
-	converted := filepath.Join(tmp, "ldpy.lidg")
+	for _, tc := range models {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := os.Stat(tc.path); err != nil {
+				t.Fatalf("missing legacy model %q: %v", tc.path, err)
+			}
 
-	convert := exec.Command("python3", filepath.Join(root, "scripts", "convert_model.py"), legacyModel, converted)
-	convert.Dir = root
-	if out, err := convert.CombinedOutput(); err != nil {
-		t.Fatalf("convert model: %v\n%s", err, out)
-	}
+			tmp := t.TempDir()
+			converted := filepath.Join(tmp, tc.name+".lidg")
 
-	id, err := LoadModel(converted)
-	if err != nil {
-		t.Fatalf("load converted model: %v", err)
-	}
+			// Convert legacy model dynamically
+			convert := exec.Command("python3", filepath.Join(root, "scripts", "convert_model.py"), tc.path, converted)
+			convert.Dir = root
+			if out, err := convert.CombinedOutput(); err != nil {
+				t.Fatalf("convert model: %v\n%s", err, out)
+			}
 
-	samples := []string{
-		"hello world",
-		"this is a short English sentence",
-		"bonjour tout le monde",
-		"ceci est une phrase en francais",
-		"hola amigos",
-		"esta es una frase en espanol",
-		"ciao a tutti",
-		"questa e una frase in italiano",
-		"hallo welt",
-		"das ist ein deutscher satz",
-		"ola mundo",
-		"isto e uma frase em portugues",
-		"hej varlden",
-		"detta ar en svensk mening",
-		"dit is een zin in het nederlands",
-		"to jest zdanie po polsku",
-		"privet mir",
-		"merhaba dunya",
-		"xin chao tat ca moi nguoi",
-		"watashi wa gengo nintei no tesuto desu",
-	}
+			// Load the converted Go model
+			id, err := LoadModel(converted)
+			if err != nil {
+				t.Fatalf("load converted model: %v", err)
+			}
 
-	goPreds := make([]string, len(samples))
-	for i, s := range samples {
-		res, err := id.IdentifyString(s)
-		if err != nil {
-			t.Fatalf("go classify sample %d: %v", i, err)
-		}
-		goPreds[i] = res.Language
-	}
+			samples := []string{
+				"hello world",
+				"this is a short English sentence",
+				"bonjour tout le monde",
+				"ceci est une phrase en francais",
+				"hola amigos",
+				"esta es una frase en espanol",
+				"ciao a tutti",
+				"questa e una frase in italiano",
+				"hallo welt",
+				"das ist ein deutscher satz",
+				"ola mundo",
+				"isto e uma frase em portugues",
+				"hej varlden",
+				"detta ar en svensk mening",
+				"dit is een zin in het nederlands",
+				"to jest zdanie po polsku",
+				"privet mir",
+				"merhaba dunya",
+				"xin chao tat ca moi nguoi",
+				"watashi wa gengo nintei no tesuto desu",
+			}
 
-	pyPreds := classifyWithPythonReference(t, legacyModel, samples)
-	if len(pyPreds) != len(goPreds) {
-		t.Fatalf("python predictions mismatch: got=%d want=%d", len(pyPreds), len(goPreds))
-	}
+			// Fetch reference predictions and metadata from Python
+			pyRef := getPythonReferenceResults(t, tc.path, samples)
 
-	for i := range goPreds {
-		if goPreds[i] != pyPreds[i] {
-			t.Fatalf("parity mismatch sample %d (%q): go=%q py=%q", i, samples[i], goPreds[i], pyPreds[i])
-		}
+			// 1. Verify expected metadata and dimensions
+			if id.model.NumLangs != pyRef.NumLangs {
+				t.Errorf("metadata mismatch NumLangs: go=%d python=%d", id.model.NumLangs, pyRef.NumLangs)
+			}
+			if id.model.NumFeats != pyRef.NumFeats {
+				t.Errorf("metadata mismatch NumFeats: go=%d python=%d", id.model.NumFeats, pyRef.NumFeats)
+			}
+			if id.model.NumStates != pyRef.NumStates {
+				t.Errorf("metadata mismatch NumStates: go=%d python=%d", id.model.NumStates, pyRef.NumStates)
+			}
+
+			// 2. Verify language classes list parity (names, length, and ordering)
+			if len(id.Classes()) != len(pyRef.Classes) {
+				t.Fatalf("classes list length mismatch: go=%d python=%d", len(id.Classes()), len(pyRef.Classes))
+			}
+			for i, c := range id.Classes() {
+				if c != pyRef.Classes[i] {
+					t.Errorf("classes list mismatch at index %d: go=%q python=%q", i, c, pyRef.Classes[i])
+				}
+			}
+
+			// 3. Verify prediction and score parity
+			for i, s := range samples {
+				res, err := id.IdentifyString(s)
+				if err != nil {
+					t.Fatalf("go classify sample %d (%q): %v", i, s, err)
+				}
+
+				pyPred := pyRef.Predictions[i]
+				if res.Language != pyPred.Lang {
+					t.Errorf("prediction mismatch sample %d (%q): go=%q py=%q", i, s, res.Language, pyPred.Lang)
+				}
+
+				// Check score within epsilon of 1e-4 (accounting for summation order differences between float32/float64)
+				diff := math.Abs(res.Score - pyPred.Score)
+				if diff > 1e-4 {
+					t.Errorf("score mismatch sample %d (%q): go=%f py=%f (diff=%f)", i, s, res.Score, pyPred.Score, diff)
+				}
+			}
+		})
 	}
 }
 
-func classifyWithPythonReference(t *testing.T, legacyModel string, samples []string) []string {
+func getPythonReferenceResults(t *testing.T, legacyModel string, samples []string) pythonReferenceResults {
 	t.Helper()
 
 	script := `
-import argparse
+import sys
+import json
 import array
 import base64
 import bz2
 import collections
 import io
 import pickle
-import sys
 
 def compat_array(typecode, initializer=None):
     if isinstance(typecode, bytes):
@@ -123,7 +179,10 @@ def load_model(path):
             classes.append(c.decode("utf-8"))
         else:
             classes.append(str(c))
-    return nb_ptc, nb_pc, classes, tk_nextmove, tk_output
+    num_langs = len(nb_pc)
+    num_feats = len(nb_ptc) // num_langs
+    num_states = len(tk_nextmove) // 256
+    return nb_ptc, nb_pc, classes, tk_nextmove, tk_output, num_langs, num_feats, num_states
 
 def classify(text, nb_ptc, nb_pc, classes, tk_nextmove, tk_output):
     state_counts = collections.defaultdict(int)
@@ -145,41 +204,59 @@ def classify(text, nb_ptc, nb_pc, classes, tk_nextmove, tk_output):
             scores[j] += c * float(nb_ptc[base + j])
 
     best = max(range(num_langs), key=lambda i: scores[i])
-    return classes[best]
+    return classes[best], scores[best]
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("model")
-    args = ap.parse_args()
-    nb_ptc, nb_pc, classes, tk_nextmove, tk_output = load_model(args.model)
-
-    for line in sys.stdin:
-        line = line.rstrip("\n")
-        print(classify(line, nb_ptc, nb_pc, classes, tk_nextmove, tk_output))
+    if len(sys.argv) < 2:
+        print("missing model path", file=sys.stderr)
+        sys.exit(1)
+    model_path = sys.argv[1]
+    nb_ptc, nb_pc, classes, tk_nextmove, tk_output, num_langs, num_feats, num_states = load_model(model_path)
+    
+    samples = json.load(sys.stdin)
+    predictions = []
+    for s in samples:
+        lang, score = classify(s, nb_ptc, nb_pc, classes, tk_nextmove, tk_output)
+        predictions.append({
+            "text": s,
+            "lang": lang,
+            "score": score
+        })
+    
+    out = {
+        "classes": classes,
+        "num_langs": num_langs,
+        "num_feats": num_feats,
+        "num_states": num_states,
+        "predictions": predictions
+    }
+    print(json.dumps(out))
 
 if __name__ == "__main__":
     main()
 `
 
+	samplesJSON, err := json.Marshal(samples)
+	if err != nil {
+		t.Fatalf("marshal samples: %v", err)
+	}
+
 	cmd := exec.Command("python3", "-c", script, legacyModel)
-	cmd.Stdin = strings.NewReader(strings.Join(samples, "\n") + "\n")
+	cmd.Stdin = bytes.NewReader(samplesJSON)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("python reference classify: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("python reference process failed: %v\nstderr:\n%s", err, stderr.String())
 	}
 
-	var out []string
-	s := bufio.NewScanner(&stdout)
-	for s.Scan() {
-		out = append(out, strings.TrimSpace(s.Text()))
+	var res pythonReferenceResults
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal python results: %v\nstdout:\n%s", err, stdout.String())
 	}
-	if err := s.Err(); err != nil {
-		t.Fatalf("scan python output: %v", err)
-	}
-	return out
+
+	return res
 }
 
 func moduleRoot(t *testing.T) string {

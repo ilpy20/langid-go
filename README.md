@@ -130,16 +130,59 @@ $ ./langid -n -l en,it <<< "Io non parlo italiano"
 ('it', 1.0000)
 ```
 
-## Custom Models
+## Model Training & Customization
 
-The original `langid.py` tooling trains models and outputs them as Python 2 `pickle` files (e.g., `*.model`). 
+### Scope and Decisions
+`langid-go` is designed as a **high-speed, highly concurrent, zero-allocation inference engine**. To keep the Go package optimized, secure, and free from external runtime dependencies or floating-point precision drift, the following architectural choices have been made:
+- **Go-Native Training is a Planned Future Feature (TODO)**: Model training requires a multi-stage statistical pipeline (corpus indexing, byte-level sliding window tokenization, Shannon information-gain calculations, n-gram optimization, and Aho-Corasick DFA state-machine construction). The reference `langid.py` implementation utilizes the Python scientific stack (`numpy` and `scipy`) for these calculations. Implementing a native Go training pipeline remains a planned future feature (TODO) once suitable Go NLP, matrix computation, or scanner compiling libraries are identified.
+- **Direct Legacy Model Loading (`.model` files) is Out of Scope**: Original models produced by Python are base64-encoded, bz2-compressed Python 2 `pickle` files. Reading Python pickles directly in Go is fragile, insecure, and computationally expensive.
 
-To use custom models in `langid.go`, you must convert them to the highly-optimized `LIDG1` binary format using the provided Python script.
+Instead, custom models are trained using the reference Python pipeline and converted to the highly-optimized, type-safe Go `.lidg` binary format. The provided conversion utility (`scripts/convert_model.py`) is modeled directly on and adapted from the original [`ldpy2ldc.py`](https://github.com/saffsd/langid.c/blob/master/ldpy2ldc.py) script in the `langid.c` package.
 
+### Custom Model Workflow
+
+#### 1. Train Your Model in Python
+Use the official Python training toolkit located in the reference repository under [langid.py/langid/train](https://github.com/saffsd/langid.py/tree/master/langid/train). 
+To train a model from a corpus directory (where each subdirectory corresponds to a language code containing text documents), run:
 ```bash
-python3 scripts/convert_model.py custom.model model/custom.lidg
+python3 path/to/langid.py/langid/train/train.py -m /path/to/output_dir /path/to/corpus
 ```
-You can then load them in Go using `langid.LoadModel("model/custom.lidg")` or via the CLI with the `-m` flag.
+This produces a legacy Python model file (e.g., `my_custom.model`).
+
+#### 2. Convert Your Model to Go `.lidg` Format
+Convert the legacy pickle model into the highly-optimized `.lidg` binary format using the provided conversion utility:
+```bash
+python3 scripts/convert_model.py my_custom.model model/my_custom.lidg
+```
+
+#### 3. Load Your Custom Model in Go
+You can load and run your custom `.lidg` model programmatically or via the command line.
+
+**Programmatically:**
+```go
+package main
+
+import (
+	"fmt"
+	"github.com/ilpy20/langid-go"
+)
+
+func main() {
+	id, err := langid.LoadModel("model/my_custom.lidg")
+	if err != nil {
+		panic(err)
+	}
+
+	res, _ := id.IdentifyString("This text will be classified by your custom model")
+	fmt.Printf("Language: %s (Log Score: %.2f)\n", res.Language, res.Score)
+}
+```
+
+**Via the CLI:**
+Specify your custom model using the `-m` or `--model` flag:
+```bash
+./langid -m model/my_custom.lidg <<< "This text will be classified by your custom model"
+```
 
 ## Acknowledgements and References
 
