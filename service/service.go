@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,9 +11,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ilpy20/langid-go"
 )
+
+const DefaultMaxRequestBytes int64 = 4 << 20
 
 // ResponseEnvelope represents the shared standard response format for API results.
 type ResponseEnvelope struct {
@@ -23,15 +27,26 @@ type ResponseEnvelope struct {
 
 // Server wraps the langid web service.
 type Server struct {
-	id     *langid.Identifier
-	server *http.Server
+	id              *langid.Identifier
+	server          *http.Server
+	maxRequestBytes int64
 }
 
 // NewServer creates a new instance of the Server with the provided identifier.
 func NewServer(id *langid.Identifier) *Server {
 	return &Server{
-		id: id,
+		id:              id,
+		maxRequestBytes: DefaultMaxRequestBytes,
 	}
+}
+
+// SetMaxRequestBytes sets the maximum size accepted for POST and PUT request bodies.
+// Non-positive values disable the limit.
+func (s *Server) SetMaxRequestBytes(n int64) {
+	if s == nil {
+		return
+	}
+	s.maxRequestBytes = n
 }
 
 // NewHandler creates and configures the HTTP router for /detect, /rank, and /demo endpoints.
@@ -48,8 +63,12 @@ func (s *Server) NewHandler() http.Handler {
 func (s *Server) Start(host string, port int) error {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	s.server = &http.Server{
-		Addr:    addr,
-		Handler: s.NewHandler(),
+		Addr:              addr,
+		Handler:           s.NewHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	fmt.Printf("Starting langid service on http://%s\n", addr)
@@ -137,9 +156,9 @@ func (s *Server) extractQuery(w http.ResponseWriter, r *http.Request) (string, b
 		data = r.URL.Query().Get("q")
 
 	case http.MethodPost:
-		bodyBytes, err := io.ReadAll(r.Body)
+		bodyBytes, err := s.readBody(w, r)
 		if err != nil {
-			writeJSONEnvelope(w, http.StatusBadRequest, nil, pointerToString("failed to read body"))
+			s.writeBodyReadError(w, err)
 			return "", false
 		}
 		contentType := r.Header.Get("Content-Type")
@@ -155,9 +174,9 @@ func (s *Server) extractQuery(w http.ResponseWriter, r *http.Request) (string, b
 		}
 
 	case http.MethodPut:
-		bodyBytes, err := io.ReadAll(r.Body)
+		bodyBytes, err := s.readBody(w, r)
 		if err != nil {
-			writeJSONEnvelope(w, http.StatusBadRequest, nil, pointerToString("failed to read body"))
+			s.writeBodyReadError(w, err)
 			return "", false
 		}
 		data = string(bodyBytes)
@@ -167,6 +186,23 @@ func (s *Server) extractQuery(w http.ResponseWriter, r *http.Request) (string, b
 		return "", false
 	}
 	return data, true
+}
+
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	reader := r.Body
+	if s.maxRequestBytes > 0 {
+		reader = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
+	}
+	return io.ReadAll(reader)
+}
+
+func (s *Server) writeBodyReadError(w http.ResponseWriter, err error) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		writeJSONEnvelope(w, http.StatusRequestEntityTooLarge, nil, pointerToString(fmt.Sprintf("request body exceeds %d bytes", maxErr.Limit)))
+		return
+	}
+	writeJSONEnvelope(w, http.StatusBadRequest, nil, pointerToString("failed to read body"))
 }
 
 func writeJSONEnvelope(w http.ResponseWriter, status int, data any, details *string) {

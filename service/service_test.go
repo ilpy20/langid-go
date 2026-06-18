@@ -294,3 +294,37 @@ func TestDemoHandler(t *testing.T) {
 		t.Errorf("returned body does not look like the demo form HTML")
 	}
 }
+
+func TestServiceRequestSizeLimit(t *testing.T) {
+	id, err := langid.NewDefaultIdentifier()
+	if err != nil {
+		t.Fatalf("failed to load default identifier: %v", err)
+	}
+
+	srv := service.NewServer(id)
+	srv.SetMaxRequestBytes(4)
+	handler := srv.NewHandler()
+
+	req := httptest.NewRequest(http.MethodPost, "/detect", strings.NewReader("hello"))
+	req.Header.Set("Content-Type", "text/plain")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status %d, got %d", http.StatusRequestEntityTooLarge, rr.Code)
+	}
+
+	var envelope struct {
+		ResponseDetails *string `json:"responseDetails"`
+		ResponseStatus  int     `json:"responseStatus"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&envelope); err != nil {
+		t.Fatalf("failed to decode JSON response: %v", err)
+	}
+	if envelope.ResponseStatus != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected envelope status %d, got %d", http.StatusRequestEntityTooLarge, envelope.ResponseStatus)
+	}
+	if envelope.ResponseDetails == nil || !strings.Contains(*envelope.ResponseDetails, "exceeds 4 bytes") {
+		t.Fatalf("expected response details to mention the 4-byte limit, got %v", envelope.ResponseDetails)
+	}
+}
