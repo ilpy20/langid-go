@@ -21,9 +21,9 @@ func TestServiceHandlers(t *testing.T) {
 	handler := srv.NewHandler()
 
 	type responseEnvelope struct {
-		ResponseData    interface{} `json:"responseData"`
-		ResponseDetails *string     `json:"responseDetails"`
-		ResponseStatus  int         `json:"responseStatus"`
+		ResponseData    any     `json:"responseData"`
+		ResponseDetails *string `json:"responseDetails"`
+		ResponseStatus  int     `json:"responseStatus"`
 	}
 
 	tests := []struct {
@@ -45,7 +45,7 @@ func TestServiceHandlers(t *testing.T) {
 					t.Errorf("expected non-nil responseData")
 					return
 				}
-				dataMap, ok := resp.ResponseData.(map[string]interface{})
+				dataMap, ok := resp.ResponseData.(map[string]any)
 				if !ok {
 					t.Errorf("expected responseData to be a map, got %T", resp.ResponseData)
 					return
@@ -79,7 +79,7 @@ func TestServiceHandlers(t *testing.T) {
 			contentType:    "application/x-www-form-urlencoded",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				dataMap, ok := resp.ResponseData.(map[string]interface{})
+				dataMap, ok := resp.ResponseData.(map[string]any)
 				if !ok {
 					t.Fatalf("expected map response")
 				}
@@ -96,7 +96,7 @@ func TestServiceHandlers(t *testing.T) {
 			contentType:    "text/plain",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				dataMap, ok := resp.ResponseData.(map[string]interface{})
+				dataMap, ok := resp.ResponseData.(map[string]any)
 				if !ok {
 					t.Fatalf("expected map response")
 				}
@@ -112,7 +112,7 @@ func TestServiceHandlers(t *testing.T) {
 			body:           "This is an english test sentence.",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				dataMap, ok := resp.ResponseData.(map[string]interface{})
+				dataMap, ok := resp.ResponseData.(map[string]any)
 				if !ok {
 					t.Fatalf("expected map response")
 				}
@@ -127,14 +127,14 @@ func TestServiceHandlers(t *testing.T) {
 			path:           "/rank?q=hello+world",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				slice, ok := resp.ResponseData.([]interface{})
+				slice, ok := resp.ResponseData.([]any)
 				if !ok {
 					t.Fatalf("expected slice response for /rank, got %T", resp.ResponseData)
 				}
 				if len(slice) == 0 {
 					t.Fatalf("expected non-empty rank list")
 				}
-				first, ok := slice[0].([]interface{})
+				first, ok := slice[0].([]any)
 				if !ok || len(first) < 2 {
 					t.Fatalf("expected list of pairs, got %v", slice[0])
 				}
@@ -162,11 +162,11 @@ func TestServiceHandlers(t *testing.T) {
 			contentType:    "application/x-www-form-urlencoded",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				slice, ok := resp.ResponseData.([]interface{})
+				slice, ok := resp.ResponseData.([]any)
 				if !ok {
 					t.Fatalf("expected slice")
 				}
-				first := slice[0].([]interface{})
+				first := slice[0].([]any)
 				if first[0] != "de" {
 					t.Errorf("expected top language 'de', got %v", first[0])
 				}
@@ -180,11 +180,11 @@ func TestServiceHandlers(t *testing.T) {
 			contentType:    "text/plain",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				slice, ok := resp.ResponseData.([]interface{})
+				slice, ok := resp.ResponseData.([]any)
 				if !ok {
 					t.Fatalf("expected slice")
 				}
-				first := slice[0].([]interface{})
+				first := slice[0].([]any)
 				if first[0] != "fr" {
 					t.Errorf("expected top language 'fr', got %v", first[0])
 				}
@@ -197,11 +197,11 @@ func TestServiceHandlers(t *testing.T) {
 			body:           "This is an english test sentence.",
 			expectedStatus: http.StatusOK,
 			verify: func(t *testing.T, resp responseEnvelope) {
-				slice, ok := resp.ResponseData.([]interface{})
+				slice, ok := resp.ResponseData.([]any)
 				if !ok {
 					t.Fatalf("expected slice")
 				}
-				first := slice[0].([]interface{})
+				first := slice[0].([]any)
 				if first[0] != "en" {
 					t.Errorf("expected top language 'en', got %v", first[0])
 				}

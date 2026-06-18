@@ -16,9 +16,9 @@ import (
 
 // ResponseEnvelope represents the shared standard response format for API results.
 type ResponseEnvelope struct {
-	ResponseData    interface{} `json:"responseData"`
-	ResponseDetails *string     `json:"responseDetails"`
-	ResponseStatus  int         `json:"responseStatus"`
+	ResponseData    any     `json:"responseData"`
+	ResponseDetails *string `json:"responseDetails"`
+	ResponseStatus  int     `json:"responseStatus"`
 }
 
 // Server wraps the langid web service.
@@ -78,14 +78,14 @@ func (s *Server) handleDetect(w http.ResponseWriter, r *http.Request) {
 
 	langid.Normalize(results)
 
-	var responseData map[string]interface{}
+	var responseData map[string]any
 	if len(results) > 0 {
-		responseData = map[string]interface{}{
+		responseData = map[string]any{
 			"language":   results[0].Language,
 			"confidence": results[0].Score,
 		}
 	} else {
-		responseData = map[string]interface{}{
+		responseData = map[string]any{
 			"language":   "",
 			"confidence": 0.0,
 		}
@@ -108,9 +108,9 @@ func (s *Server) handleRank(w http.ResponseWriter, r *http.Request) {
 
 	langid.Normalize(results)
 
-	responseData := make([][2]interface{}, len(results))
+	responseData := make([][2]any, len(results))
 	for i, r := range results {
-		responseData[i] = [2]interface{}{r.Language, r.Score}
+		responseData[i] = [2]any{r.Language, r.Score}
 	}
 
 	writeJSONEnvelope(w, http.StatusOK, responseData, nil)
@@ -169,7 +169,7 @@ func (s *Server) extractQuery(w http.ResponseWriter, r *http.Request) (string, b
 	return data, true
 }
 
-func writeJSONEnvelope(w http.ResponseWriter, status int, data interface{}, details *string) {
+func writeJSONEnvelope(w http.ResponseWriter, status int, data any, details *string) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.WriteHeader(status)
 
