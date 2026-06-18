@@ -73,11 +73,7 @@ func TestPreprocessArgs(t *testing.T) {
 
 func TestBatchMode(t *testing.T) {
 	// Create temporary files
-	tmpDir, err := os.MkdirTemp(".", "batch_test_")
-	if err != nil {
-		t.Fatalf("failed to create local temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	engFile := filepath.Join(tmpDir, "english.txt")
 	fraFile := filepath.Join(tmpDir, "french.txt")
@@ -212,3 +208,117 @@ func TestBatchMode(t *testing.T) {
 		}
 	})
 }
+
+func TestGoldenBatchLegacy(t *testing.T) {
+	// Create temporary files
+	tmpDir := t.TempDir()
+
+	tmpDirAbs, err := filepath.Abs(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to get absolute path of temp dir: %v", err)
+	}
+
+	// We use the same content and filenames so the output is consistent
+	engFile := filepath.Join(tmpDirAbs, "english.txt")
+	fraFile := filepath.Join(tmpDirAbs, "french.txt")
+	missingFile := filepath.Join(tmpDirAbs, "missing.txt")
+
+	if err := os.WriteFile(engFile, []byte("this is a very simple english sentence"), 0644); err != nil {
+		t.Fatalf("failed to write english file: %v", err)
+	}
+	if err := os.WriteFile(fraFile, []byte("ceci est une phrase en francais"), 0644); err != nil {
+		t.Fatalf("failed to write french file: %v", err)
+	}
+
+	// Prepare stdin payload with paths
+	stdinInput := strings.Join([]string{engFile, fraFile, missingFile}, "\n") + "\n"
+
+	// Helper to run main.go with given args
+	runCmd := func(args ...string) (string, error) {
+		cmdArgs := append([]string{"run", "main.go"}, args...)
+		cmd := exec.Command("go", cmdArgs...)
+		cmd.Stdin = strings.NewReader(stdinInput)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			return "", fmt.Errorf("err: %v, stderr: %q", err, stderr.String())
+		}
+		return stdout.String(), nil
+	}
+
+	// Make sure the testdata directory exists
+	testdataDir := filepath.Join("testdata")
+	if err := os.MkdirAll(testdataDir, 0755); err != nil {
+		t.Fatalf("failed to create testdata dir: %v", err)
+	}
+
+	// We'll replace the full local temporary directory path with [TMPDIR]/ to make it platform-independent
+	cleanOutput := func(out string) string {
+		out = strings.ReplaceAll(out, tmpDirAbs+string(filepath.Separator), "[TMPDIR]/")
+		// Also standardizing line endings just in case of Windows
+		out = strings.ReplaceAll(out, "\r\n", "\n")
+		return out
+	}
+
+	testCases := []struct {
+		name       string
+		args       []string
+		goldenFile string
+	}{
+		{
+			name:       "classic basic",
+			args:       []string{"--batch", "--format", "classic"},
+			goldenFile: "classic_basic.txt",
+		},
+		{
+			name:       "classic dist",
+			args:       []string{"--batch", "--format", "classic", "--dist"},
+			goldenFile: "classic_dist.txt",
+		},
+		{
+			name:       "classic normalize",
+			args:       []string{"--batch", "--format", "classic", "--normalize"},
+			goldenFile: "classic_norm.txt",
+		},
+		{
+			name:       "classic dist normalize",
+			args:       []string{"--batch", "--format", "classic", "--dist", "--normalize"},
+			goldenFile: "classic_dist_norm.txt",
+		},
+	}
+
+	update := os.Getenv("UPDATE_GOLDEN") != ""
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runCmd(tc.args...)
+			if err != nil {
+				t.Fatalf("runCmd failed: %v", err)
+			}
+
+			cleaned := cleanOutput(out)
+			goldenPath := filepath.Join(testdataDir, tc.goldenFile)
+
+			if update {
+				if err := os.WriteFile(goldenPath, []byte(cleaned), 0644); err != nil {
+					t.Fatalf("failed to write golden file %s: %v", goldenPath, err)
+				}
+				t.Logf("updated golden file %s", goldenPath)
+				return
+			}
+
+			expectedBytes, err := os.ReadFile(goldenPath)
+			if err != nil {
+				t.Fatalf("failed to read golden file %s: %v (run with UPDATE_GOLDEN=1 to generate)", goldenPath, err)
+			}
+
+			expected := string(expectedBytes)
+			if cleaned != expected {
+				t.Errorf("output mismatch for %s:\nGOT:\n%s\nWANT:\n%s", tc.name, cleaned, expected)
+			}
+		})
+	}
+}
+

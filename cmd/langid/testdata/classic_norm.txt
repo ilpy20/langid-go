@@ -1,0 +1,3 @@
+[TMPDIR]/english.txt,('en', 1.0000)
+[TMPDIR]/french.txt,('fr', 1.0000)
+[TMPDIR]/missing.txt,NOSUCHFILE
