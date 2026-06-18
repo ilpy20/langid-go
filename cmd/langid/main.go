@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -183,6 +185,18 @@ func main() {
 	}
 
 	if actualBatchMode {
+		var csvWriter *csv.Writer
+		var classes []string
+		if actualFormat == "csv" {
+			csvWriter = csv.NewWriter(os.Stdout)
+			defer csvWriter.Flush()
+			if actualDist {
+				classes = id.Classes()
+				header := append([]string{"path"}, classes...)
+				_ = csvWriter.Write(header)
+			}
+		}
+
 		s := bufio.NewScanner(os.Stdin)
 		for s.Scan() {
 			path := strings.TrimSpace(s.Text())
@@ -191,11 +205,158 @@ func main() {
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				fmt.Printf("%s,NOSUCHFILE\n", path)
+				if actualFormat == "csv" {
+					if actualDist {
+						row := make([]string, len(classes)+1)
+						row[0] = path
+						row[1] = "NOSUCHFILE"
+						_ = csvWriter.Write(row)
+					} else {
+						_ = csvWriter.Write([]string{path, "NOSUCHFILE", ""})
+					}
+				} else if actualFormat == "jsonl" {
+					fmt.Printf("{\"path\":%q,\"error\":\"NOSUCHFILE\"}\n", path)
+				} else {
+					fmt.Printf("%s,NOSUCHFILE\n", path)
+				}
 				continue
 			}
-			fmt.Printf("%s,", path)
-			processInput(id, data, actualDist, actualNormalize)
+
+			switch actualFormat {
+			case "csv":
+				if actualDist {
+					results, err := id.RankBytes(data)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "rank: %v\n", err)
+						continue
+					}
+					if actualNormalize {
+						langid.Normalize(results)
+					}
+					scoreMap := make(map[string]string)
+					for _, r := range results {
+						if actualNormalize {
+							scoreMap[r.Language] = fmt.Sprintf("%.4f", r.Score)
+						} else {
+							scoreMap[r.Language] = fmt.Sprintf("%.1f", r.Score)
+						}
+					}
+					row := make([]string, 0, len(classes)+1)
+					row = append(row, path)
+					for _, c := range classes {
+						row = append(row, scoreMap[c])
+					}
+					_ = csvWriter.Write(row)
+				} else {
+					var lang string
+					var confidence float64
+					if actualNormalize {
+						results, err := id.RankBytes(data)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "rank: %v\n", err)
+							continue
+						}
+						langid.Normalize(results)
+						lang = results[0].Language
+						confidence = results[0].Score
+					} else {
+						res, err := id.IdentifyBytes(data)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "classify: %v\n", err)
+							continue
+						}
+						lang = res.Language
+						confidence = res.Score
+					}
+
+					var confStr string
+					if actualNormalize {
+						confStr = fmt.Sprintf("%.4f", confidence)
+					} else {
+						confStr = fmt.Sprintf("%.1f", confidence)
+					}
+					_ = csvWriter.Write([]string{path, lang, confStr})
+				}
+
+			case "jsonl":
+				if actualDist {
+					results, err := id.RankBytes(data)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "rank: %v\n", err)
+						continue
+					}
+					if actualNormalize {
+						langid.Normalize(results)
+					}
+					type jsonlRankItem struct {
+						Language string  `json:"language"`
+						Score    float64 `json:"score"`
+					}
+					ranking := make([]jsonlRankItem, len(results))
+					for i, r := range results {
+						ranking[i] = jsonlRankItem{
+							Language: r.Language,
+							Score:    r.Score,
+						}
+					}
+					type jsonlDistRow struct {
+						Path    string          `json:"path"`
+						Ranking []jsonlRankItem `json:"ranking"`
+					}
+					row := jsonlDistRow{
+						Path:    path,
+						Ranking: ranking,
+					}
+					b, err := json.Marshal(row)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "json marshal: %v\n", err)
+						continue
+					}
+					fmt.Println(string(b))
+				} else {
+					var lang string
+					var confidence float64
+					if actualNormalize {
+						results, err := id.RankBytes(data)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "rank: %v\n", err)
+							continue
+						}
+						langid.Normalize(results)
+						lang = results[0].Language
+						confidence = results[0].Score
+					} else {
+						res, err := id.IdentifyBytes(data)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "classify: %v\n", err)
+							continue
+						}
+						lang = res.Language
+						confidence = res.Score
+					}
+
+					type jsonlClassifyRow struct {
+						Path       string  `json:"path"`
+						Language   string  `json:"language"`
+						Confidence float64 `json:"confidence"`
+					}
+					row := jsonlClassifyRow{
+						Path:       path,
+						Language:   lang,
+						Confidence: confidence,
+					}
+					b, err := json.Marshal(row)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "json marshal: %v\n", err)
+						continue
+					}
+					fmt.Println(string(b))
+				}
+
+			default: // "classic"
+				fmt.Printf("%s,", path)
+				processInput(id, data, actualDist, actualNormalize)
+			}
 		}
 		if err := s.Err(); err != nil {
 			fmt.Fprintf(os.Stderr, "read stdin: %v\n", err)

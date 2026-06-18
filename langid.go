@@ -113,6 +113,16 @@ func RankFile(path string) ([]Result, error) {
 	return id.RankFile(path)
 }
 
+// Classes returns the active language classes supported by the identifier.
+func (id *Identifier) Classes() []string {
+	if id == nil {
+		return nil
+	}
+	res := make([]string, len(id.classes))
+	copy(res, id.classes)
+	return res
+}
+
 // ResetLanguages restores the active language set of the identifier to include
 // all languages present in the original loaded model.
 func (id *Identifier) ResetLanguages() {
