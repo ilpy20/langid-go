@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,6 +69,59 @@ func TestPreprocessArgs(t *testing.T) {
 				t.Errorf("preprocessArgs(%v) = %v; want %v", tc.input, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestResolveServeHostDefaultsToLoopback(t *testing.T) {
+	if got := resolveServeHost("", false); got != "127.0.0.1" {
+		t.Fatalf("expected loopback default host, got %q", got)
+	}
+	if got := resolveServeHost("0.0.0.0", false); got != "0.0.0.0" {
+		t.Fatalf("expected explicit host to be preserved, got %q", got)
+	}
+}
+
+func TestReadAllLimited(t *testing.T) {
+	t.Run("within limit", func(t *testing.T) {
+		data, err := readAllLimited(strings.NewReader("hello"), 5)
+		if err != nil {
+			t.Fatalf("readAllLimited failed: %v", err)
+		}
+		if string(data) != "hello" {
+			t.Fatalf("unexpected data %q", data)
+		}
+	})
+
+	t.Run("over limit", func(t *testing.T) {
+		_, err := readAllLimited(strings.NewReader("hello"), 4)
+		if err == nil {
+			t.Fatal("expected size limit error")
+		}
+		if !strings.Contains(err.Error(), "limit 4 bytes") {
+			t.Fatalf("unexpected error %v", err)
+		}
+	})
+
+	t.Run("no limit", func(t *testing.T) {
+		data, err := readAllLimited(strings.NewReader("hello"), 0)
+		if err != nil {
+			t.Fatalf("readAllLimited failed: %v", err)
+		}
+		if string(data) != "hello" {
+			t.Fatalf("unexpected data %q", data)
+		}
+	})
+}
+
+func TestBatchErrorCode(t *testing.T) {
+	if got := batchErrorCode(os.ErrNotExist); got != "NOSUCHFILE" {
+		t.Fatalf("expected NOSUCHFILE, got %q", got)
+	}
+	if got := batchErrorCode(fmt.Errorf("wrap: %w", errInputTooLarge)); got != "INPUTTOOLARGE" {
+		t.Fatalf("expected INPUTTOOLARGE, got %q", got)
+	}
+	if got := batchErrorCode(io.EOF); got != "READERR" {
+		t.Fatalf("expected READERR, got %q", got)
 	}
 }
 
@@ -438,5 +492,3 @@ func TestInteractiveMode(t *testing.T) {
 		}
 	})
 }
-
-

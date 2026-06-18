@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,6 +20,10 @@ import (
 	"github.com/ilpy20/langid-go/urlclass"
 	"golang.org/x/term"
 )
+
+const defaultMaxInputBytes int64 = 4 << 20
+
+var errInputTooLarge = errors.New("input exceeds configured byte limit")
 
 var isTerminal = func(fd int) bool {
 	if os.Getenv("FORCE_TTY") == "1" {
@@ -109,6 +114,7 @@ func main() {
 		format        string
 		fFormat       string
 		ignoreMissing bool
+		maxInputBytes int64
 
 		serve     bool
 		demo      bool
@@ -132,11 +138,12 @@ func main() {
 	flag.StringVar(&format, "format", "classic", "output format for batch mode: classic, csv, or jsonl")
 	flag.StringVar(&fFormat, "f", "", "output format for batch mode: classic, csv, or jsonl (alias for -format)")
 	flag.BoolVar(&ignoreMissing, "ignore-missing", false, "silently skip missing or unreadable files in batch mode")
+	flag.Int64Var(&maxInputBytes, "max-bytes", defaultMaxInputBytes, "maximum bytes read per stdin, file, request, or URL body (<=0 disables limit)")
 
 	flag.BoolVar(&serve, "serve", false, "start HTTP service mode")
 	flag.BoolVar(&demo, "demo", false, "start HTTP service mode and open demo page in web browser")
 	flag.BoolVar(&remote, "remote", false, "resolve and bind to outward-facing local IP address if no host is specified")
-	flag.StringVar(&host, "host", "", "host to bind HTTP service to (defaults to local hostname if empty, or 127.0.0.1 if unresolved)")
+	flag.StringVar(&host, "host", "", "host to bind HTTP service to (defaults to 127.0.0.1 unless --remote is set)")
 	flag.IntVar(&port, "port", 9008, "port to bind HTTP service to")
 	flag.StringVar(&urlTarget, "url", "", "classify the content of a URL")
 	flag.StringVar(&uTarget, "u", "", "classify the content of a URL (alias for -url)")
@@ -151,6 +158,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  -n, --normalize\n    \tnormalize confidence scores to probability values (0.0 to 1.0)")
 		fmt.Fprintln(os.Stderr, "  -f, --format string\n    \toutput format for batch mode: classic, csv, or jsonl (default \"classic\")")
 		fmt.Fprintln(os.Stderr, "      --ignore-missing\n    \tsilently skip missing or unreadable files in batch mode")
+		fmt.Fprintln(os.Stderr, "      --max-bytes int\n    \tmaximum bytes read per stdin, file, request, or URL body (default 4194304)")
 		fmt.Fprintln(os.Stderr, "      --serve\n    \tstart HTTP service mode")
 		fmt.Fprintln(os.Stderr, "      --demo\n    \tstart HTTP service mode and open demo page in web browser")
 		fmt.Fprintln(os.Stderr, "      --host string\n    \thost to bind HTTP service to (default \"127.0.0.1\")")
@@ -223,34 +231,10 @@ func main() {
 	}
 
 	if serve || demo {
-		actualHost := host
-		if actualHost == "" {
-			if remote {
-				// Connect to google.com over UDP to discover external IP
-				conn, err := net.Dial("udp", "google.com:80")
-				if err == nil {
-					actualHost = conn.LocalAddr().(*net.UDPAddr).IP.String()
-					conn.Close()
-				} else {
-					actualHost = "127.0.0.1"
-				}
-			} else {
-				// Resolve local hostname to IP
-				hostname, err := os.Hostname()
-				if err == nil {
-					addrs, err := net.LookupHost(hostname)
-					if err == nil && len(addrs) > 0 {
-						actualHost = addrs[0]
-					} else {
-						actualHost = "127.0.0.1"
-					}
-				} else {
-					actualHost = "127.0.0.1"
-				}
-			}
-		}
+		actualHost := resolveServeHost(host, remote)
 
 		srv := service.NewServer(id)
+		srv.SetMaxRequestBytes(maxInputBytes)
 		if demo {
 			go openBrowser(fmt.Sprintf("http://%s:%d/demo", actualHost, port))
 		}
@@ -268,6 +252,7 @@ func main() {
 
 	if actualURLTarget != "" {
 		uc := urlclass.NewClient(id)
+		uc.SetMaxResponseBytes(maxInputBytes)
 		if actualDist {
 			results, bodyLen, err := uc.RankURL(actualURLTarget, 10*time.Second)
 			if err != nil {
@@ -328,7 +313,7 @@ func main() {
 			if path == "" {
 				return
 			}
-			data, err := os.ReadFile(path)
+			data, err := readFileLimited(path, maxInputBytes)
 			if err != nil {
 				if ignoreMissing {
 					return
@@ -337,15 +322,15 @@ func main() {
 					if actualDist {
 						row := make([]string, len(classes)+1)
 						row[0] = path
-						row[1] = "NOSUCHFILE"
+						row[1] = batchErrorCode(err)
 						_ = csvWriter.Write(row)
 					} else {
-						_ = csvWriter.Write([]string{path, "NOSUCHFILE", ""})
+						_ = csvWriter.Write([]string{path, batchErrorCode(err), ""})
 					}
 				} else if actualFormat == "jsonl" {
-					fmt.Printf("{\"path\":%q,\"error\":\"NOSUCHFILE\"}\n", path)
+					fmt.Printf("{\"path\":%q,\"error\":%q}\n", path, batchErrorCode(err))
 				} else {
-					fmt.Printf("%s,NOSUCHFILE\n", path)
+					fmt.Printf("%s,%s\n", path, batchErrorCode(err))
 				}
 				return
 			}
@@ -492,7 +477,7 @@ func main() {
 				processPath(path)
 			}
 		} else {
-			s := bufio.NewScanner(os.Stdin)
+			s := newScannerWithLimit(os.Stdin, maxInputBytes)
 			for s.Scan() {
 				processPath(s.Text())
 			}
@@ -505,7 +490,7 @@ func main() {
 	}
 
 	if isTerminal(int(os.Stdin.Fd())) {
-		s := bufio.NewScanner(os.Stdin)
+		s := newScannerWithLimit(os.Stdin, maxInputBytes)
 		fmt.Print(">>> ")
 		for s.Scan() {
 			line := s.Bytes()
@@ -521,7 +506,7 @@ func main() {
 	}
 
 	if lineMode {
-		s := bufio.NewScanner(os.Stdin)
+		s := newScannerWithLimit(os.Stdin, maxInputBytes)
 		for s.Scan() {
 			line := s.Bytes()
 			processInput(id, line, actualDist, actualNormalize)
@@ -533,12 +518,82 @@ func main() {
 		return
 	}
 
-	data, err := io.ReadAll(os.Stdin)
+	data, err := readAllLimited(os.Stdin, maxInputBytes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "read stdin: %v\n", err)
 		os.Exit(1)
 	}
 	processInput(id, data, actualDist, actualNormalize)
+}
+
+func resolveServeHost(host string, remote bool) string {
+	if host != "" {
+		return host
+	}
+	if !remote {
+		return "127.0.0.1"
+	}
+
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP != nil {
+		return addr.IP.String()
+	}
+	return "127.0.0.1"
+}
+
+func readFileLimited(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	data, err := readAllLimited(f, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+	return data, nil
+}
+
+func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return io.ReadAll(r)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%w: limit %d bytes", errInputTooLarge, maxBytes)
+	}
+	return data, nil
+}
+
+func newScannerWithLimit(r io.Reader, maxBytes int64) *bufio.Scanner {
+	s := bufio.NewScanner(r)
+	maxBufSize := int64(1 << 30) // 1 GiB default limit if <= 0
+	if maxBytes > 0 {
+		maxBufSize = min(maxBytes, 1<<30)
+	}
+	s.Buffer(nil, int(maxBufSize))
+	return s
+}
+
+func batchErrorCode(err error) string {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "NOSUCHFILE"
+	case errors.Is(err, errInputTooLarge):
+		return "INPUTTOOLARGE"
+	default:
+		return "READERR"
+	}
 }
 
 func openBrowser(url string) {
