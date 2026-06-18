@@ -7,11 +7,13 @@ Like the originals, it comes pre-trained on 97 languages and is virtually insens
 ## Background & Motivation
 
 In building production-grade language classification pipelines in Go, developers face significant gaps in the native NLP ecosystem:
-- **Limitations of `lingua-go`**: While feature-rich, the popular `lingua-go` library has been largely abandoned for years. Operationally, it suffers from severe bugs when processing short texts, where it frequently misclassifies inputs and returns random or incorrect languages. It also introduces high computational and memory overhead.
-- **Limitations of `whatlanggo`**: While extremely fast, `whatlanggo` supports a limited set of languages and formats its output exclusively in ISO 639-3 (three-letter codes), which is incompatible with downstream pipelines that require standard ISO 639-1 two-letter codes.
+- **Limitations of `lingua-go`**: When [`lingua-go`](https://github.com/pemistahl/lingua-go) was originally released, it was marketed as the "most accurate language detector for Go," specifically claiming superior accuracy on short sentences compared to lightweight alternatives like `whatlanggo`. However, in real-world production workloads, it suffers from severe operational shortcomings:
+  * **Failure on Short/Mixed Text**: In practice, `lingua-go` is highly fragile when processing short texts containing mixed scripts, multilingual vocabularies, or modern brand/product names, where it frequently misclassifies inputs and returns incorrect, random languages.
+  * **Resource Overhead**: It introduces heavy CPU and memory consumption and is no longer actively maintained.
+- **Limitations of `whatlanggo`**: While extremely fast, [`whatlanggo`](https://github.com/abadojack/whatlanggo) supports a limited set of languages and formats its output exclusively in ISO 639-3 (three-letter codes), which is incompatible with downstream pipelines that require standard ISO 639-1 two-letter codes.
 - **Fragility of CGO Wrappers**: Previous attempts to bring the proven, robust Naive Bayes algorithm of `langid` to Go relied entirely on fragile CGO bindings (such as [dbalan/langid_go](https://github.com/dbalan/langid_go) wrapping `langid.c`). CGO introduces severe runtime thread overhead, interferes with Go's garbage collector and memory tracking, and complicates cross-compilation.
 
-**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** that achieves exact mathematical parity with the original Python unpickler and Naive Bayes vector engine, while running with **zero allocations** in standard concurrency-safe hot paths.
+**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** that achieves exact mathematical parity with the original Python unpickler and Naive Bayes vector engine, while running with **zero allocations** in standard concurrency-safe hot paths. This makes it highly robust to short inputs, brand name pollution, and mixed script texts.
 
 ## Features
 
