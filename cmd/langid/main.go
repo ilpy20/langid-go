@@ -9,8 +9,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ilpy20/langid-go"
+	"github.com/ilpy20/langid-go/service"
+	"github.com/ilpy20/langid-go/urlclass"
 	"golang.org/x/term"
 )
 
@@ -103,6 +106,12 @@ func main() {
 		format        string
 		fFormat       string
 		ignoreMissing bool
+
+		serve     bool
+		host      string
+		port      int
+		urlTarget string
+		uTarget   string
 	)
 
 	flag.StringVar(&modelPath, "model", "", "path to .lidg model (optional, uses default if omitted)")
@@ -119,6 +128,12 @@ func main() {
 	flag.StringVar(&fFormat, "f", "", "output format for batch mode: classic, csv, or jsonl (alias for -format)")
 	flag.BoolVar(&ignoreMissing, "ignore-missing", false, "silently skip missing or unreadable files in batch mode")
 
+	flag.BoolVar(&serve, "serve", false, "start HTTP service mode")
+	flag.StringVar(&host, "host", "127.0.0.1", "host to bind HTTP service to")
+	flag.IntVar(&port, "port", 9008, "port to bind HTTP service to")
+	flag.StringVar(&urlTarget, "url", "", "classify the content of a URL")
+	flag.StringVar(&uTarget, "u", "", "classify the content of a URL (alias for -url)")
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintln(os.Stderr, "  -m, -model string\n    \tpath to .lidg model (optional, uses default if omitted)")
@@ -129,6 +144,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  -n, --normalize\n    \tnormalize confidence scores to probability values (0.0 to 1.0)")
 		fmt.Fprintln(os.Stderr, "  -f, --format string\n    \toutput format for batch mode: classic, csv, or jsonl (default \"classic\")")
 		fmt.Fprintln(os.Stderr, "      --ignore-missing\n    \tsilently skip missing or unreadable files in batch mode")
+		fmt.Fprintln(os.Stderr, "      --serve\n    \tstart HTTP service mode")
+		fmt.Fprintln(os.Stderr, "      --host string\n    \thost to bind HTTP service to (default \"127.0.0.1\")")
+		fmt.Fprintln(os.Stderr, "      --port int\n    \tport to bind HTTP service to (default 9008)")
+		fmt.Fprintln(os.Stderr, "  -u, --url string\n    \tclassify the content of a URL")
 	}
 
 	os.Args = append(os.Args[:1], preprocessArgs(os.Args[1:])...)
@@ -193,6 +212,31 @@ func main() {
 			fmt.Fprintf(os.Stderr, "filter languages: %v\n", err)
 			os.Exit(1)
 		}
+	}
+
+	if serve {
+		srv := service.NewServer(id)
+		if err := srv.Start(host, port); err != nil {
+			fmt.Fprintf(os.Stderr, "start service: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	actualURLTarget := urlTarget
+	if uTarget != "" {
+		actualURLTarget = uTarget
+	}
+
+	if actualURLTarget != "" {
+		uc := urlclass.NewClient(id)
+		res, _, err := uc.ClassifyURL(actualURLTarget, 10*time.Second)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "url classification: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s 0 (%s, %.1f)\n", actualURLTarget, res.Language, res.Score)
+		return
 	}
 
 	if actualBatchMode {
