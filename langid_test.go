@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func TestSetLanguagesAndReset(t *testing.T) {
 		t.Fatalf("failed to create default identifier: %v", err)
 	}
 
-	origCount := id.numLangs
+	origCount := id.activeRuntime().numLangs
 	if origCount == 0 {
 		t.Fatalf("expected positive number of original languages, got 0")
 	}
@@ -25,21 +26,21 @@ func TestSetLanguagesAndReset(t *testing.T) {
 		t.Fatalf("SetLanguages(\"en\", \"fr\") failed: %v", err)
 	}
 
-	if id.numLangs != 2 {
-		t.Errorf("expected 2 active languages, got %d", id.numLangs)
+	if got := id.activeRuntime().numLangs; got != 2 {
+		t.Errorf("expected 2 active languages, got %d", got)
 	}
 
-	if len(id.classes) != 2 {
-		t.Errorf("expected 2 active classes, got %d", len(id.classes))
+	if got := len(id.activeRuntime().classes); got != 2 {
+		t.Errorf("expected 2 active classes, got %d", got)
 	}
 
 	// Verify that the active classes are indeed "en" and "fr"
 	classesMap := make(map[string]bool)
-	for _, c := range id.classes {
+	for _, c := range id.activeRuntime().classes {
 		classesMap[c] = true
 	}
 	if !classesMap["en"] || !classesMap["fr"] {
-		t.Errorf("active classes do not match [en, fr]: %v", id.classes)
+		t.Errorf("active classes do not match [en, fr]: %v", id.activeRuntime().classes)
 	}
 
 	// German text ("das ist ein deutscher satz") must classify as either "en" or "fr" now
@@ -57,16 +58,16 @@ func TestSetLanguagesAndReset(t *testing.T) {
 		t.Fatalf("SetLanguages(\"de\", \"it\") failed: %v", err)
 	}
 
-	if id.numLangs != 2 {
-		t.Errorf("expected 2 active languages, got %d", id.numLangs)
+	if got := id.activeRuntime().numLangs; got != 2 {
+		t.Errorf("expected 2 active languages, got %d", got)
 	}
 
 	classesMap2 := make(map[string]bool)
-	for _, c := range id.classes {
+	for _, c := range id.activeRuntime().classes {
 		classesMap2[c] = true
 	}
 	if !classesMap2["de"] || !classesMap2["it"] {
-		t.Errorf("active classes do not match [de, it]: %v", id.classes)
+		t.Errorf("active classes do not match [de, it]: %v", id.activeRuntime().classes)
 	}
 
 	// German text should now classify as "de"
@@ -81,8 +82,8 @@ func TestSetLanguagesAndReset(t *testing.T) {
 	// 3. Reset languages back to full set
 	id.ResetLanguages()
 
-	if id.numLangs != origCount {
-		t.Errorf("expected restored count %d, got %d", origCount, id.numLangs)
+	if got := id.activeRuntime().numLangs; got != origCount {
+		t.Errorf("expected restored count %d, got %d", origCount, got)
 	}
 
 	// German text should now classify as "de" still, but other languages are available
@@ -101,7 +102,7 @@ func TestSetLanguagesInvalid(t *testing.T) {
 		t.Fatalf("failed to create default identifier: %v", err)
 	}
 
-	origCount := id.numLangs
+	origCount := id.activeRuntime().numLangs
 
 	// 1. Partially invalid request
 	err = id.SetLanguages("en", "invalid_lang_code", "fr")
@@ -113,8 +114,8 @@ func TestSetLanguagesInvalid(t *testing.T) {
 	}
 
 	// Verify atomicity (state is unchanged)
-	if id.numLangs != origCount {
-		t.Errorf("expected identifier state to remain unchanged (count=%d) after partial failure, but got count=%d", origCount, id.numLangs)
+	if got := id.activeRuntime().numLangs; got != origCount {
+		t.Errorf("expected identifier state to remain unchanged (count=%d) after partial failure, but got count=%d", origCount, got)
 	}
 
 	// 2. Fully invalid request
@@ -123,8 +124,8 @@ func TestSetLanguagesInvalid(t *testing.T) {
 		t.Fatalf("expected SetLanguages with fully invalid languages to fail, but it succeeded")
 	}
 
-	if id.numLangs != origCount {
-		t.Errorf("expected identifier state to remain unchanged (count=%d) after full failure, but got count=%d", origCount, id.numLangs)
+	if got := id.activeRuntime().numLangs; got != origCount {
+		t.Errorf("expected identifier state to remain unchanged (count=%d) after full failure, but got count=%d", origCount, got)
 	}
 
 	// 3. Empty slice / nil parameter resets languages
@@ -137,8 +138,8 @@ func TestSetLanguagesInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetLanguages() with empty slice failed: %v", err)
 	}
-	if id.numLangs != origCount {
-		t.Errorf("expected empty SetLanguages() to reset to full set (%d), got %d", origCount, id.numLangs)
+	if got := id.activeRuntime().numLangs; got != origCount {
+		t.Errorf("expected empty SetLanguages() to reset to full set (%d), got %d", origCount, got)
 	}
 }
 
@@ -148,15 +149,15 @@ func TestKeepOnlyBackwardCompatibility(t *testing.T) {
 		t.Fatalf("failed to create default identifier: %v", err)
 	}
 
-	origCount := id.numLangs
+	origCount := id.activeRuntime().numLangs
 
 	// 1. KeepOnly should succeed on valid subset
 	err = id.KeepOnly("en", "fr")
 	if err != nil {
 		t.Fatalf("KeepOnly failed: %v", err)
 	}
-	if id.numLangs != 2 {
-		t.Errorf("expected 2 languages kept, got %d", id.numLangs)
+	if got := id.activeRuntime().numLangs; got != 2 {
+		t.Errorf("expected 2 languages kept, got %d", got)
 	}
 
 	// 2. KeepOnly should fail on partially invalid subset (strict validation parity)
@@ -173,8 +174,8 @@ func TestKeepOnlyBackwardCompatibility(t *testing.T) {
 
 	// Reset languages
 	id.ResetLanguages()
-	if id.numLangs != origCount {
-		t.Errorf("expected reset to work, got %d vs %d", id.numLangs, origCount)
+	if got := id.activeRuntime().numLangs; got != origCount {
+		t.Errorf("expected reset to work, got %d vs %d", got, origCount)
 	}
 }
 
@@ -322,3 +323,85 @@ func TestIdentifyAndRankFileErrors(t *testing.T) {
 	}
 }
 
+func TestConcurrentSetLanguagesAndIdentify(t *testing.T) {
+	id, err := NewDefaultIdentifier()
+	if err != nil {
+		t.Fatalf("failed to create default identifier: %v", err)
+	}
+
+	texts := [][]byte{
+		[]byte("this is english"),
+		[]byte("bonjour tout le monde"),
+		[]byte("das ist ein deutscher satz"),
+		[]byte("ciao a tutti"),
+	}
+	subsets := [][]string{
+		{"en", "fr"},
+		{"de", "it"},
+		{"en", "es", "it"},
+		nil,
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for j := range 500 {
+				text := texts[j%len(texts)]
+				res, err := id.IdentifyBytes(text)
+				if err != nil {
+					t.Errorf("IdentifyBytes failed: %v", err)
+					return
+				}
+				if res.Language == "" {
+					t.Errorf("IdentifyBytes returned empty language")
+					return
+				}
+
+				ranks, err := id.RankBytes(text)
+				if err != nil {
+					t.Errorf("RankBytes failed: %v", err)
+					return
+				}
+				if len(ranks) == 0 {
+					t.Errorf("RankBytes returned no results")
+					return
+				}
+			}
+		})
+	}
+
+	for range 2 {
+		wg.Go(func() {
+			for j := range 200 {
+				subset := subsets[j%len(subsets)]
+				if subset == nil {
+					id.ResetLanguages()
+					continue
+				}
+				if err := id.SetLanguages(subset...); err != nil {
+					t.Errorf("SetLanguages failed: %v", err)
+					return
+				}
+			}
+		})
+	}
+
+	wg.Wait()
+}
+
+func BenchmarkIdentifyBytesParallel(b *testing.B) {
+	id, err := NewDefaultIdentifier()
+	if err != nil {
+		b.Fatalf("failed to create default identifier: %v", err)
+	}
+
+	text := []byte("This is a moderately sized English sentence used to benchmark concurrent language identification.")
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, err := id.IdentifyBytes(text); err != nil {
+				b.Fatalf("IdentifyBytes failed: %v", err)
+			}
+		}
+	})
+}

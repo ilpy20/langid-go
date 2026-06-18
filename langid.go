@@ -1,9 +1,11 @@
-// Package langid provides a high-performance, zero-allocation, zero-dependency natural language identifier
-// supporting 97 languages. It is a pure Go port of the popular langid.py and langid.c tools, achieving
-// exact mathematical parity with their Naive Bayes classifiers and DFA state transition engines.
+// Package langid provides a high-performance natural language identifier
+// library supporting 97 languages. It is a pure Go runtime port of the langid
+// inference stack, initially derived from langid.c and later expanded for
+// parity with langid.js and langid.py.
 //
-// The package is completely CGO-free, making it simple to cross-compile and safe for highly concurrent
-// production pipelines.
+// The package ports the Naive Bayes/DFA inference path, not the original
+// training pipeline. It is CGO-free, making it simple to cross-compile and safe
+// for highly concurrent production pipelines.
 package langid
 
 import (
@@ -12,19 +14,15 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ilpy20/langid-go/internal/modelio"
 )
 
 // Identifier classifies text by language using a pre-trained model.
 type Identifier struct {
-	model *modelio.Model
-	pool  sync.Pool
-
-	numLangs int
-	classes  []string
-	nbPC     []float32
-	nbPTC    []float32
+	model   *modelio.Model
+	runtime atomic.Pointer[identifierRuntime]
 }
 
 // Result contains the best predicted class and its raw log score.
@@ -39,6 +37,14 @@ type workBuffer struct {
 	featCounts   []uint32
 	activeFeats  []uint32
 	scores       []float64
+}
+
+type identifierRuntime struct {
+	numLangs int
+	classes  []string
+	nbPC     []float32
+	nbPTC    []float32
+	pool     *sync.Pool
 }
 
 func newWorkBuffer(numStates, numFeats, numLangs int) *workBuffer {
@@ -76,13 +82,9 @@ func NewDefaultIdentifier() (*Identifier, error) {
 }
 
 func newIdentifier(m *modelio.Model) *Identifier {
-	return &Identifier{
-		model:    m,
-		numLangs: m.NumLangs,
-		classes:  m.Classes,
-		nbPC:     m.NbPC,
-		nbPTC:    m.NbPTC,
-	}
+	id := &Identifier{model: m}
+	id.runtime.Store(newIdentifierRuntime(m, m.Classes, m.NbPC, m.NbPTC))
+	return id
 }
 
 func getDefaultIdentifier() (*Identifier, error) {
@@ -121,24 +123,22 @@ func RankFile(path string) ([]Result, error) {
 
 // Classes returns the active language classes supported by the identifier.
 func (id *Identifier) Classes() []string {
-	if id == nil {
+	rt := id.activeRuntime()
+	if rt == nil {
 		return nil
 	}
-	res := make([]string, len(id.classes))
-	copy(res, id.classes)
+	res := make([]string, len(rt.classes))
+	copy(res, rt.classes)
 	return res
 }
 
 // ResetLanguages restores the active language set of the identifier to include
 // all languages present in the original loaded model.
 func (id *Identifier) ResetLanguages() {
-	id.numLangs = id.model.NumLangs
-	id.classes = id.model.Classes
-	id.nbPC = id.model.NbPC
-	id.nbPTC = id.model.NbPTC
-
-	// Clear pool to recreate correctly sized buffers
-	id.pool = sync.Pool{}
+	if id == nil || id.model == nil {
+		return
+	}
+	id.runtime.Store(newIdentifierRuntime(id.model, id.model.Classes, id.model.NbPC, id.model.NbPTC))
 }
 
 // SetLanguages restricts the active language set of the identifier to the specified subset.
@@ -146,26 +146,26 @@ func (id *Identifier) ResetLanguages() {
 // If any requested language is not supported by the model, it returns an error and leaves
 // the active language set unmodified (atomic operation).
 func (id *Identifier) SetLanguages(langs ...string) error {
+	if id == nil || id.model == nil {
+		return fmt.Errorf("identifier is nil")
+	}
 	if len(langs) == 0 {
 		id.ResetLanguages()
 		return nil
 	}
 
-	// Build a map of valid classes in the original model for fast lookup
 	modelLangs := make(map[string]bool, len(id.model.Classes))
 	for _, c := range id.model.Classes {
 		modelLangs[c] = true
 	}
 
-	// Validate that every requested language is supported by the model
 	for _, l := range langs {
 		if !modelLangs[l] {
 			return fmt.Errorf("language %q is not supported by this model", l)
 		}
 	}
 
-	// Build keepIndices and newClasses list
-	validLangs := make(map[string]bool)
+	validLangs := make(map[string]bool, len(langs))
 	for _, l := range langs {
 		validLangs[l] = true
 	}
@@ -191,14 +191,7 @@ func (id *Identifier) SetLanguages(langs ...string) error {
 		}
 	}
 
-	id.numLangs = len(keepIndices)
-	id.classes = newClasses
-	id.nbPC = newPC
-	id.nbPTC = newPTC
-
-	// Clear pool to recreate correctly sized buffers
-	id.pool = sync.Pool{}
-
+	id.runtime.Store(newIdentifierRuntime(id.model, newClasses, newPC, newPTC))
 	return nil
 }
 
@@ -220,20 +213,21 @@ func (id *Identifier) IdentifyString(text string) (Result, error) {
 
 // IdentifyBytes predicts a language label for bytes.
 func (id *Identifier) IdentifyBytes(text []byte) (Result, error) {
-	buf, err := id.getLogProbs(text)
+	rt := id.activeRuntime()
+	buf, err := id.getLogProbs(rt, text)
 	if err != nil {
 		return Result{}, err
 	}
-	defer id.pool.Put(buf)
+	defer rt.pool.Put(buf)
 
 	best := 0
-	for i := 1; i < id.numLangs; i++ {
+	for i := 1; i < rt.numLangs; i++ {
 		if buf.scores[i] > buf.scores[best] {
 			best = i
 		}
 	}
 
-	return Result{Language: id.classes[best], Score: buf.scores[best]}, nil
+	return Result{Language: rt.classes[best], Score: buf.scores[best]}, nil
 }
 
 // RankString returns a sorted list of all languages and their raw log scores.
@@ -243,16 +237,17 @@ func (id *Identifier) RankString(text string) ([]Result, error) {
 
 // RankBytes returns a sorted list of all languages and their raw log scores.
 func (id *Identifier) RankBytes(text []byte) ([]Result, error) {
-	buf, err := id.getLogProbs(text)
+	rt := id.activeRuntime()
+	buf, err := id.getLogProbs(rt, text)
 	if err != nil {
 		return nil, err
 	}
-	defer id.pool.Put(buf)
+	defer rt.pool.Put(buf)
 
-	results := make([]Result, id.numLangs)
-	for i := 0; i < id.numLangs; i++ {
+	results := make([]Result, rt.numLangs)
+	for i := 0; i < rt.numLangs; i++ {
 		results[i] = Result{
-			Language: id.classes[i],
+			Language: rt.classes[i],
 			Score:    buf.scores[i],
 		}
 	}
@@ -284,7 +279,6 @@ func (id *Identifier) RankFile(path string) ([]Result, error) {
 	return id.RankBytes(content)
 }
 
-
 // Normalize converts a list of raw log-probabilities into a proper probability distribution (0.0 to 1.0).
 func Normalize(results []Result) {
 	if len(results) == 0 {
@@ -309,15 +303,15 @@ func Normalize(results []Result) {
 	}
 }
 
-func (id *Identifier) getLogProbs(text []byte) (*workBuffer, error) {
-	if id == nil || id.model == nil {
+func (id *Identifier) getLogProbs(rt *identifierRuntime, text []byte) (*workBuffer, error) {
+	if id == nil || id.model == nil || rt == nil {
 		return nil, fmt.Errorf("identifier is nil")
 	}
 
 	m := id.model
-	buf, ok := id.pool.Get().(*workBuffer)
+	buf, ok := rt.pool.Get().(*workBuffer)
 	if !ok {
-		buf = newWorkBuffer(m.NumStates, m.NumFeats, id.numLangs)
+		buf = newWorkBuffer(m.NumStates, m.NumFeats, rt.numLangs)
 	}
 
 	state := uint16(0)
@@ -346,21 +340,43 @@ func (id *Identifier) getLogProbs(text []byte) (*workBuffer, error) {
 	}
 	buf.activeStates = buf.activeStates[:0]
 
-	for i := 0; i < id.numLangs; i++ {
-		buf.scores[i] = float64(id.nbPC[i])
+	for i := 0; i < rt.numLangs; i++ {
+		buf.scores[i] = float64(rt.nbPC[i])
 	}
 
 	for _, feat := range buf.activeFeats {
 		count := buf.featCounts[feat]
 		buf.featCounts[feat] = 0
 
-		base := int(feat) * id.numLangs
+		base := int(feat) * rt.numLangs
 		c := float64(count)
-		for lang := 0; lang < id.numLangs; lang++ {
-			buf.scores[lang] += c * float64(id.nbPTC[base+lang])
+		for lang := 0; lang < rt.numLangs; lang++ {
+			buf.scores[lang] += c * float64(rt.nbPTC[base+lang])
 		}
 	}
 	buf.activeFeats = buf.activeFeats[:0]
 
 	return buf, nil
+}
+
+func (id *Identifier) activeRuntime() *identifierRuntime {
+	if id == nil {
+		return nil
+	}
+	return id.runtime.Load()
+}
+
+func newIdentifierRuntime(m *modelio.Model, classes []string, nbPC []float32, nbPTC []float32) *identifierRuntime {
+	rt := &identifierRuntime{
+		numLangs: len(classes),
+		classes:  classes,
+		nbPC:     nbPC,
+		nbPTC:    nbPTC,
+	}
+	rt.pool = &sync.Pool{
+		New: func() any {
+			return newWorkBuffer(m.NumStates, m.NumFeats, rt.numLangs)
+		},
+	}
+	return rt
 }
