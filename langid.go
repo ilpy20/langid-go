@@ -3,6 +3,7 @@ package langid
 import (
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"sync"
 
@@ -78,15 +79,38 @@ func newIdentifier(m *modelio.Model) *Identifier {
 	}
 }
 
-// Classify uses a lazily-initialized embedded default model.
-func Classify(text string) (Result, error) {
+func getDefaultIdentifier() (*Identifier, error) {
 	defaultOnce.Do(func() {
 		defaultID, defaultErr = NewDefaultIdentifier()
 	})
-	if defaultErr != nil {
-		return Result{}, defaultErr
+	return defaultID, defaultErr
+}
+
+// Classify uses a lazily-initialized embedded default model.
+func Classify(text string) (Result, error) {
+	id, err := getDefaultIdentifier()
+	if err != nil {
+		return Result{}, err
 	}
-	return defaultID.IdentifyString(text)
+	return id.IdentifyString(text)
+}
+
+// IdentifyFile reads the file at the specified path and predicts its language using the default identifier.
+func IdentifyFile(path string) (Result, error) {
+	id, err := getDefaultIdentifier()
+	if err != nil {
+		return Result{}, err
+	}
+	return id.IdentifyFile(path)
+}
+
+// RankFile reads the file at the specified path and ranks all supported languages by likelihood using the default identifier.
+func RankFile(path string) ([]Result, error) {
+	id, err := getDefaultIdentifier()
+	if err != nil {
+		return nil, err
+	}
+	return id.RankFile(path)
 }
 
 // ResetLanguages restores the active language set of the identifier to include
@@ -223,6 +247,27 @@ func (id *Identifier) RankBytes(text []byte) ([]Result, error) {
 
 	return results, nil
 }
+
+// IdentifyFile reads the file at the specified path and predicts its language.
+// If reading the file fails, it returns the wrapped filesystem error without swallowing context.
+func (id *Identifier) IdentifyFile(path string) (Result, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return Result{}, fmt.Errorf("failed to read file: %w", err)
+	}
+	return id.IdentifyBytes(content)
+}
+
+// RankFile reads the file at the specified path and ranks all supported languages by likelihood.
+// If reading the file fails, it returns the wrapped filesystem error without swallowing context.
+func (id *Identifier) RankFile(path string) ([]Result, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+	return id.RankBytes(content)
+}
+
 
 // Normalize converts a list of raw log-probabilities into a proper probability distribution (0.0 to 1.0).
 func Normalize(results []Result) {

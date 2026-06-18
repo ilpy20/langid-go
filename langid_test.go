@@ -1,6 +1,9 @@
 package langid
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -219,3 +222,103 @@ func TestClassificationAndRankingWithSubsets(t *testing.T) {
 		t.Errorf("expected first rank to be en, got %q", ranks[0].Language)
 	}
 }
+
+func TestIdentifyAndRankFile(t *testing.T) {
+	// Create a temporary file
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "english.txt")
+	content := []byte("this is a simple english sentence to classify.")
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
+		t.Fatalf("failed to write temporary file: %v", err)
+	}
+
+	// 1. Test package-level IdentifyFile
+	res, err := IdentifyFile(filePath)
+	if err != nil {
+		t.Fatalf("IdentifyFile failed: %v", err)
+	}
+	if res.Language != "en" {
+		t.Errorf("expected language 'en', got %q", res.Language)
+	}
+
+	// 2. Test package-level RankFile
+	ranks, err := RankFile(filePath)
+	if err != nil {
+		t.Fatalf("RankFile failed: %v", err)
+	}
+	if len(ranks) == 0 {
+		t.Fatalf("expected positive number of ranked languages, got 0")
+	}
+	if ranks[0].Language != "en" {
+		t.Errorf("expected top rank language 'en', got %q", ranks[0].Language)
+	}
+
+	// 3. Test instance-method IdentifyFile on custom Identifier
+	id, err := NewDefaultIdentifier()
+	if err != nil {
+		t.Fatalf("failed to create default identifier: %v", err)
+	}
+
+	res, err = id.IdentifyFile(filePath)
+	if err != nil {
+		t.Fatalf("id.IdentifyFile failed: %v", err)
+	}
+	if res.Language != "en" {
+		t.Errorf("expected language 'en', got %q", res.Language)
+	}
+
+	// 4. Test instance-method RankFile on custom Identifier
+	ranks, err = id.RankFile(filePath)
+	if err != nil {
+		t.Fatalf("id.RankFile failed: %v", err)
+	}
+	if len(ranks) == 0 {
+		t.Fatalf("expected positive number of ranked languages, got 0")
+	}
+	if ranks[0].Language != "en" {
+		t.Errorf("expected top rank language 'en', got %q", ranks[0].Language)
+	}
+}
+
+func TestIdentifyAndRankFileErrors(t *testing.T) {
+	// 1. Missing file path error check
+	missingPath := "/nonexistent/path/to/some/file.txt"
+	_, err := IdentifyFile(missingPath)
+	if err == nil {
+		t.Fatalf("expected IdentifyFile on missing file to fail, but it succeeded")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected error to wrap os.ErrNotExist, got %v", err)
+	}
+
+	_, err = RankFile(missingPath)
+	if err == nil {
+		t.Fatalf("expected RankFile on missing file to fail, but it succeeded")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected error to wrap os.ErrNotExist, got %v", err)
+	}
+
+	// Instance-level error check
+	id, err := NewDefaultIdentifier()
+	if err != nil {
+		t.Fatalf("failed to create default identifier: %v", err)
+	}
+
+	_, err = id.IdentifyFile(missingPath)
+	if err == nil {
+		t.Fatalf("expected id.IdentifyFile on missing file to fail")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected error to wrap os.ErrNotExist, got %v", err)
+	}
+
+	_, err = id.RankFile(missingPath)
+	if err == nil {
+		t.Fatalf("expected id.RankFile on missing file to fail")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected error to wrap os.ErrNotExist, got %v", err)
+	}
+}
+
