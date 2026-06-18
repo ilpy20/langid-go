@@ -26,12 +26,12 @@ The diagram below outlines the path a model takes from a raw training corpus to 
 
 ```mermaid
 graph TD
-    Corpus[Raw Text Corpus<br/>/corpus/{lang}/*.txt] -->|1. train.py<br/>Python SciPy Stack| Pickle[Legacy Pickle Model<br/>my_custom.model]
-    Pickle -->|2. convert_model.py<br/>Go Binary Serialization| Lidg[Type-Safe Binary Model<br/>my_custom.lidg]
+    Corpus["Raw Text Corpus<br/>/corpus/{lang}/*.txt"] -->|1. train.py<br/>Python SciPy Stack| Pickle["Legacy Pickle Model<br/>my_custom.model"]
+    Pickle -->|2. convert_model.py<br/>Go Binary Serialization| Lidg["Type-Safe Binary Model<br/>my_custom.lidg"]
     
     subgraph Go Production Deployment
-        Lidg -->|3a. Programmatic<br/>langid.LoadModel| App[Go Microservice / Identifier]
-        Lidg -->|3b. Command Line<br/>langid -m| CLI[langid CLI Tool]
+        Lidg -->|3a. Programmatic<br/>langid.LoadModel| App["Go Microservice / Identifier"]
+        Lidg -->|3b. Command Line<br/>langid -m| CLI["langid CLI Tool"]
     end
 
     style Lidg fill:#2a9d8f,stroke:#264653,stroke-width:2px,color:#fff
