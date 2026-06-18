@@ -1,3 +1,9 @@
+// Package langid provides a high-performance, zero-allocation, zero-dependency natural language identifier
+// supporting 97 languages. It is a pure Go port of the popular langid.py and langid.c tools, achieving
+// exact mathematical parity with their Naive Bayes classifiers and DFA state transition engines.
+//
+// The package is completely CGO-free, making it simple to cross-compile and safe for highly concurrent
+// production pipelines.
 package langid
 
 import (

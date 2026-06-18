@@ -1,0 +1,124 @@
+# langid-go
+
+> Pure Go zero-dependency natural language identifier with support for 97 languages. Port of langid.c and langid.py.
+
+## Overview
+
+`langid-go` is a high-performance Go language identification library and CLI tool. It is pre-trained on 97 languages, guarantees exact mathematical parity with the original Naive Bayes/DFA engine of `langid.py`, and features a zero-allocation inference hot-loop utilizing a flat-array "sparse set" architecture borrowed from `langid.c`. It is completely CGO-free and suitable for high-throughput stream processing.
+
+## Quick Start
+
+```bash
+go get github.com/ilpy20/langid-go@latest
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"github.com/ilpy20/langid-go"
+)
+
+func main() {
+	res, err := langid.Classify("This is a short English sentence")
+	if err == nil {
+		fmt.Printf("Language: %s (Log Score: %.2f)\n", res.Language, res.Score)
+	}
+}
+```
+
+## Key Concepts
+
+- **Zero-Allocation Hot-Loop**: Inference runs completely without allocations on the hot path by reusing state transition and score slices via a `sync.Pool` of work buffers.
+- **Embedded Model**: The default 97-language Naive Bayes classifier is built into the binary via Go's `embed` package, enabling standalone deployment with no external file dependencies.
+- **Language Subsetting**: Restrict language identification to a subset of supported languages, which significantly increases accuracy and decreases prediction latency.
+- **Type-Safe Model Format (`.lidg`)**: Compiles original Python pickle models into a fast, cross-platform, pure binary layout.
+
+## API Reference
+
+### Core Functions
+
+- `Classify(text string) (Result, error)` - Classifies text using the default lazily-initialized embedded model.
+- `Normalize(results []Result)` - Normalizes log scores in-place into a probability distribution (0.0 to 1.0).
+- `IdentifyFile(path string) (Result, error)` - Identifies the language of a local file using the default model.
+- `RankFile(path string) ([]Result, error)` - Ranks all supported languages for a local file using the default model.
+- `NewDefaultIdentifier() (*Identifier, error)` - Creates a new language identifier instance with the default model.
+- `LoadModel(path string) (*Identifier, error)` - Loads a custom `.lidg` binary model from the file system.
+
+### Core Types
+
+- `Result` - Struct containing `Language` (ISO 639-1 code) and its classification `Score` (raw negative log probability, or 0.0-1.0 probability if normalized).
+- `Identifier` - Stateful classification engine. Multiple goroutines can safely invoke its methods concurrently.
+  - `(id *Identifier) IdentifyString(text string) (Result, error)`
+  - `(id *Identifier) IdentifyBytes(text []byte) (Result, error)`
+  - `(id *Identifier) RankString(text string) ([]Result, error)`
+  - `(id *Identifier) RankBytes(text []byte) ([]Result, error)`
+  - `(id *Identifier) SetLanguages(langs ...string) error` - Atomically restricts active languages or resets them if nil/empty.
+  - `(id *Identifier) ResetLanguages()` - Resets active languages to all model-supported classes.
+
+## Common Patterns
+
+### Subsetting and Normalization
+
+```go
+id, _ := langid.NewDefaultIdentifier()
+_ = id.SetLanguages("en", "es", "fr") // Restrict to English, Spanish, French
+
+results, _ := id.RankString("Hola mundo")
+langid.Normalize(results) // Scale confidence scores from 0.0 to 1.0
+
+for _, r := range results[:2] {
+    fmt.Printf("%s: %.2f%%\n", r.Language, r.Score * 100)
+}
+```
+
+### Webpage URL Classification
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+	"github.com/ilpy20/langid-go"
+	"github.com/ilpy20/langid-go/urlclass"
+)
+
+func main() {
+	id, _ := langid.NewDefaultIdentifier()
+	client := urlclass.NewClient(id)
+
+	res, _, err := client.ClassifyURL("https://example.com", 5*time.Second)
+	if err == nil {
+		fmt.Printf("Language: %s\n", res.Language)
+	}
+}
+```
+
+### Self-Hosted HTTP Microservice
+
+```go
+package main
+
+import (
+	"github.com/ilpy20/langid-go"
+	"github.com/ilpy20/langid-go/service"
+)
+
+func main() {
+	id, _ := langid.NewDefaultIdentifier()
+	srv := service.NewServer(id)
+	_ = srv.Start("127.0.0.1", 9008)
+}
+```
+
+## Error Handling
+
+- Return errors on model loading (`LoadModel`), if file-reading fails (`IdentifyFile`), or if a language filter contains unsupported languages (`SetLanguages`).
+
+## References
+
+- Repository: https://github.com/ilpy20/langid-go
+- Go Reference: https://pkg.go.dev/github.com/ilpy20/langid-go
+- Issues: https://github.com/ilpy20/langid-go/issues
