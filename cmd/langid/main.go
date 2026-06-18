@@ -7,7 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -108,6 +111,8 @@ func main() {
 		ignoreMissing bool
 
 		serve     bool
+		demo      bool
+		remote    bool
 		host      string
 		port      int
 		urlTarget string
@@ -129,7 +134,9 @@ func main() {
 	flag.BoolVar(&ignoreMissing, "ignore-missing", false, "silently skip missing or unreadable files in batch mode")
 
 	flag.BoolVar(&serve, "serve", false, "start HTTP service mode")
-	flag.StringVar(&host, "host", "127.0.0.1", "host to bind HTTP service to")
+	flag.BoolVar(&demo, "demo", false, "start HTTP service mode and open demo page in web browser")
+	flag.BoolVar(&remote, "remote", false, "resolve and bind to outward-facing local IP address if no host is specified")
+	flag.StringVar(&host, "host", "", "host to bind HTTP service to (defaults to local hostname if empty, or 127.0.0.1 if unresolved)")
 	flag.IntVar(&port, "port", 9008, "port to bind HTTP service to")
 	flag.StringVar(&urlTarget, "url", "", "classify the content of a URL")
 	flag.StringVar(&uTarget, "u", "", "classify the content of a URL (alias for -url)")
@@ -145,6 +152,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  -f, --format string\n    \toutput format for batch mode: classic, csv, or jsonl (default \"classic\")")
 		fmt.Fprintln(os.Stderr, "      --ignore-missing\n    \tsilently skip missing or unreadable files in batch mode")
 		fmt.Fprintln(os.Stderr, "      --serve\n    \tstart HTTP service mode")
+		fmt.Fprintln(os.Stderr, "      --demo\n    \tstart HTTP service mode and open demo page in web browser")
 		fmt.Fprintln(os.Stderr, "      --host string\n    \thost to bind HTTP service to (default \"127.0.0.1\")")
 		fmt.Fprintln(os.Stderr, "      --port int\n    \tport to bind HTTP service to (default 9008)")
 		fmt.Fprintln(os.Stderr, "  -u, --url string\n    \tclassify the content of a URL")
@@ -214,9 +222,39 @@ func main() {
 		}
 	}
 
-	if serve {
+	if serve || demo {
+		actualHost := host
+		if actualHost == "" {
+			if remote {
+				// Connect to google.com over UDP to discover external IP
+				conn, err := net.Dial("udp", "google.com:80")
+				if err == nil {
+					actualHost = conn.LocalAddr().(*net.UDPAddr).IP.String()
+					conn.Close()
+				} else {
+					actualHost = "127.0.0.1"
+				}
+			} else {
+				// Resolve local hostname to IP
+				hostname, err := os.Hostname()
+				if err == nil {
+					addrs, err := net.LookupHost(hostname)
+					if err == nil && len(addrs) > 0 {
+						actualHost = addrs[0]
+					} else {
+						actualHost = "127.0.0.1"
+					}
+				} else {
+					actualHost = "127.0.0.1"
+				}
+			}
+		}
+
 		srv := service.NewServer(id)
-		if err := srv.Start(host, port); err != nil {
+		if demo {
+			go openBrowser(fmt.Sprintf("http://%s:%d/demo", actualHost, port))
+		}
+		if err := srv.Start(actualHost, port); err != nil {
 			fmt.Fprintf(os.Stderr, "start service: %v\n", err)
 			os.Exit(1)
 		}
@@ -468,4 +506,23 @@ func main() {
 		os.Exit(1)
 	}
 	processInput(id, data, actualDist, actualNormalize)
+}
+
+func openBrowser(url string) {
+	// Wait a brief moment to ensure the server starts listening first
+	time.Sleep(100 * time.Millisecond)
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly":
+		cmd = exec.Command("xdg-open", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		// Silent fallback on unsupported platforms
+		return
+	}
+	_ = cmd.Start()
 }
