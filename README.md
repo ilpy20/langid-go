@@ -20,7 +20,12 @@ In building production-grade language classification pipelines in Go, developers
 
 - **Fragility of CGO Wrappers**: Previous attempts to bring the proven, robust Naive Bayes algorithm of `langid` to Go relied entirely on fragile CGO bindings (such as [dbalan/langid_go](https://github.com/dbalan/langid_go) wrapping `langid.c`). CGO introduces severe runtime thread overhead, interferes with Go's garbage collector and memory tracking, and complicates cross-compilation.
 
-**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** that achieves exact mathematical parity with the original Python unpickler and Naive Bayes vector engine, while running with **zero allocations** in standard concurrency-safe hot paths. This makes it highly robust to short inputs, brand name pollution, and mixed script texts.
+**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** that achieves exact mathematical parity with the original Python unpickler and Naive Bayes vector engine, while running with **zero allocations** in standard concurrency-safe hot paths.
+
+### Why this architecture is critical for modern LLM Chatbots and AI Agents:
+- **Robustness to Messy, Short Inputs**: LLM chatbot prompts and agent instructions are notoriously short, fragmented, and noisy. They are heavily polluted with brand names, technical jargon, code syntax, mixed scripts, and emojis. Because `langid` utilizes a Naive Bayes classifier trained via cross-domain Information Gain (IG) feature selection, it remains virtually immune to these domain-specific artifacts, avoiding the random misclassifications that plague traditional character-distance models.
+- **Embedded & Zero-Allocation**: Running language classification via external microservices or heavy Python dependencies introduces unacceptable latency into real-time chatbot routing. `langid-go` embeds the model directly via `go:embed` and performs inference with zero garbage collection overhead on the hot path, making it perfect for high-throughput LLM gateway routing.
+- **Model Portability & Future Native Training**: While other libraries bundle black-box models or bloat repositories with static test data, `langid-go` provides a clean pipeline for loading custom `.lidg` binary models. In addition, its roadmap includes native Go-native training, enabling developers to build and adapt language classification models dynamically within their Go agent runtimes.
 
 ## Features
 
