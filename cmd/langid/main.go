@@ -90,6 +90,8 @@ func main() {
 		dMode     bool
 		normalize bool
 		nMode     bool
+		format    string
+		fFormat   string
 	)
 
 	flag.StringVar(&modelPath, "model", "", "path to .lidg model (optional, uses default if omitted)")
@@ -102,6 +104,8 @@ func main() {
 	flag.BoolVar(&dMode, "d", false, "show full distribution over languages (rank mode) (alias for -dist)")
 	flag.BoolVar(&normalize, "normalize", false, "normalize confidence scores to probability values (0.0 to 1.0)")
 	flag.BoolVar(&nMode, "n", false, "normalize confidence scores to probability values (0.0 to 1.0) (alias for -normalize)")
+	flag.StringVar(&format, "format", "classic", "output format for batch mode: classic, csv, or jsonl")
+	flag.StringVar(&fFormat, "f", "", "output format for batch mode: classic, csv, or jsonl (alias for -format)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -111,6 +115,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  -b, --batch\n    \tbatch mode: treat stdin lines as file paths to classify")
 		fmt.Fprintln(os.Stderr, "  -d, --dist\n    \tshow full distribution over languages (rank mode)")
 		fmt.Fprintln(os.Stderr, "  -n, --normalize\n    \tnormalize confidence scores to probability values (0.0 to 1.0)")
+		fmt.Fprintln(os.Stderr, "  -f, --format string\n    \toutput format for batch mode: classic, csv, or jsonl (default \"classic\")")
 	}
 
 	os.Args = append(os.Args[:1], preprocessArgs(os.Args[1:])...)
@@ -120,7 +125,27 @@ func main() {
 	if mPath != "" {
 		actualModelPath = mPath
 	}
-	actualBatchMode := batchMode || bMode
+
+	formatSpecified := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "format" || f.Name == "f" {
+			formatSpecified = true
+		}
+	})
+
+	actualFormat := "classic"
+	if fFormat != "" {
+		actualFormat = fFormat
+	} else if format != "" {
+		actualFormat = format
+	}
+
+	if actualFormat != "classic" && actualFormat != "csv" && actualFormat != "jsonl" {
+		fmt.Fprintf(os.Stderr, "unknown output format: %s\n", actualFormat)
+		os.Exit(1)
+	}
+
+	actualBatchMode := batchMode || bMode || formatSpecified
 	actualDist := dist || dMode
 	actualNormalize := normalize || nMode
 
