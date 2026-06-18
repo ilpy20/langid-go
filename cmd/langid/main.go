@@ -268,12 +268,45 @@ func main() {
 
 	if actualURLTarget != "" {
 		uc := urlclass.NewClient(id)
-		res, _, err := uc.ClassifyURL(actualURLTarget, 10*time.Second)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "url classification: %v\n", err)
-			os.Exit(1)
+		if actualDist {
+			results, bodyLen, err := uc.RankURL(actualURLTarget, 10*time.Second)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "url classification: %v\n", err)
+				os.Exit(1)
+			}
+			if actualNormalize {
+				langid.Normalize(results)
+			}
+			fmt.Printf("%s %d [", actualURLTarget, bodyLen)
+			for i, r := range results {
+				if i > 0 {
+					fmt.Print(", ")
+				}
+				if actualNormalize {
+					fmt.Printf("('%s', %.4f)", r.Language, r.Score)
+				} else {
+					fmt.Printf("('%s', %.1f)", r.Language, r.Score)
+				}
+			}
+			fmt.Println("]")
+		} else {
+			if actualNormalize {
+				results, bodyLen, err := uc.RankURL(actualURLTarget, 10*time.Second)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "url classification: %v\n", err)
+					os.Exit(1)
+				}
+				langid.Normalize(results)
+				fmt.Printf("%s %d ('%s', %.4f)\n", actualURLTarget, bodyLen, results[0].Language, results[0].Score)
+			} else {
+				res, bodyLen, err := uc.ClassifyURL(actualURLTarget, 10*time.Second)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "url classification: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("%s %d ('%s', %.1f)\n", actualURLTarget, bodyLen, res.Language, res.Score)
+			}
 		}
-		fmt.Printf("%s 0 (%s, %.1f)\n", actualURLTarget, res.Language, res.Score)
 		return
 	}
 
