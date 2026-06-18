@@ -89,8 +89,42 @@ func Classify(text string) (Result, error) {
 	return defaultID.IdentifyString(text)
 }
 
-// KeepOnly restricts the identifier to a specific subset of languages.
-func (id *Identifier) KeepOnly(langs ...string) error {
+// ResetLanguages restores the active language set of the identifier to include
+// all languages present in the original loaded model.
+func (id *Identifier) ResetLanguages() {
+	id.numLangs = id.model.NumLangs
+	id.classes = id.model.Classes
+	id.nbPC = id.model.NbPC
+	id.nbPTC = id.model.NbPTC
+
+	// Clear pool to recreate correctly sized buffers
+	id.pool = sync.Pool{}
+}
+
+// SetLanguages restricts the active language set of the identifier to the specified subset.
+// If langs is empty or nil, it resets the active languages to the original model languages.
+// If any requested language is not supported by the model, it returns an error and leaves
+// the active language set unmodified (atomic operation).
+func (id *Identifier) SetLanguages(langs ...string) error {
+	if len(langs) == 0 {
+		id.ResetLanguages()
+		return nil
+	}
+
+	// Build a map of valid classes in the original model for fast lookup
+	modelLangs := make(map[string]bool, len(id.model.Classes))
+	for _, c := range id.model.Classes {
+		modelLangs[c] = true
+	}
+
+	// Validate that every requested language is supported by the model
+	for _, l := range langs {
+		if !modelLangs[l] {
+			return fmt.Errorf("language %q is not supported by this model", l)
+		}
+	}
+
+	// Build keepIndices and newClasses list
 	validLangs := make(map[string]bool)
 	for _, l := range langs {
 		validLangs[l] = true
@@ -98,7 +132,7 @@ func (id *Identifier) KeepOnly(langs ...string) error {
 
 	var newClasses []string
 	var newPC []float32
-	keepIndices := make([]int, 0, len(langs))
+	keepIndices := make([]int, 0, len(validLangs))
 
 	for i, c := range id.model.Classes {
 		if validLangs[c] {
@@ -106,10 +140,6 @@ func (id *Identifier) KeepOnly(langs ...string) error {
 			newClasses = append(newClasses, c)
 			newPC = append(newPC, id.model.NbPC[i])
 		}
-	}
-
-	if len(newClasses) == 0 {
-		return fmt.Errorf("none of the requested languages were found in the model")
 	}
 
 	newPTC := make([]float32, id.model.NumFeats*len(keepIndices))
@@ -130,6 +160,17 @@ func (id *Identifier) KeepOnly(langs ...string) error {
 	id.pool = sync.Pool{}
 
 	return nil
+}
+
+// KeepOnly restricts the identifier to a specific subset of languages.
+//
+// Deprecated: Use SetLanguages instead, which has identical behavior with
+// stricter language validation and support for resetting subsets.
+func (id *Identifier) KeepOnly(langs ...string) error {
+	if len(langs) == 0 {
+		return fmt.Errorf("must specify at least one language to keep")
+	}
+	return id.SetLanguages(langs...)
 }
 
 // IdentifyString predicts a language label for text.
@@ -234,7 +275,7 @@ func (id *Identifier) getLogProbs(text []byte) (*workBuffer, error) {
 		s := int(st)
 		start := m.TkOutputS[s]
 		n := m.TkOutputC[s]
-		for i := uint16(0); i < n; i++ {
+		for i := range n {
 			feat := m.TkOutput[int(start)+int(i)]
 			if buf.featCounts[feat] == 0 {
 				buf.activeFeats = append(buf.activeFeats, feat)
