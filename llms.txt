@@ -1,17 +1,27 @@
 # langid-go
 
-> Pure Go natural language identifier library with support for 97 languages. Runtime port initially derived from langid.c, then expanded against langid.js and langid.py. Training pipeline not included.
+> Pure Go natural language identifier library with support for 97 languages. Runtime port initially derived from `langid.c`, then expanded against `langid.js` and `langid.py`. Training pipeline not included.
 
-## Overview
+---
 
-`langid-go` is a high-performance Go language identification library and CLI tool. It is pre-trained on 97 languages, guarantees exact mathematical parity with the original Naive Bayes/DFA inference engine, and features a zero-allocation inference hot-loop utilizing a flat-array "sparse set" architecture borrowed from `langid.c`. Its implementation lineage is `langid.c` first, then feature/parity work from `langid.js` and `langid.py`. It is completely CGO-free and suitable for high-throughput stream processing.
+## Documentation Directory
+
+Detailed specifications, architecture, and CLI usage guides can be found in the following documents:
+- [Architecture & Background](docs/architecture_and_background.md) - History, comparison with other Go NLP libraries (`lingua-go`, `whatlanggo`), and deep-dive into the zero-allocation pooling state machine.
+- [Library API Guide](docs/library_usage.md) - Full programmatic documentation of advanced usage patterns, language subsetting, probability normalization, file identification, and programmatic packages (`urlclass`, `service`).
+- [CLI Usage Guide](docs/cli_usage.md) - Command-line specifications, batch file processing formatting (classic, CSV, JSONL), URL classification, and setting up the self-hosted HTTP microservice.
+- [Model Training & Customization](docs/model_training.md) - Guide to training custom models in Python and compiling them to the type-safe Go `.lidg` binary format.
+
+---
 
 ## Quick Start
 
+### Installation
 ```bash
 go get github.com/ilpy20/langid-go@latest
 ```
 
+### Basic Programmatic Inference
 ```go
 package main
 
@@ -28,17 +38,20 @@ func main() {
 }
 ```
 
-## Key Concepts
+---
 
-- **Zero-Allocation Hot-Loop**: Inference runs completely without allocations on the hot path by reusing state transition and score slices via a `sync.Pool` of work buffers.
-- **Embedded Model**: The default 97-language Naive Bayes classifier is built into the binary via Go's `embed` package, enabling standalone deployment with no external file dependencies.
-- **Language Subsetting**: Restrict language identification to a subset of supported languages, which significantly increases accuracy and decreases prediction latency.
-- **Type-Safe Model Format (`.lidg`)**: Compiles original Python pickle models into a fast, cross-platform, pure binary layout.
+## Core Concepts
+
+- **Zero-Allocation Hot-Loop**: Leverages a `sync.Pool` of recycling `*workBuffer` structures (storing state counts, active states, feature counts, active features, and output score slices) to bypass runtime heap allocations during inference.
+- **Embedded Model**: The default 97-language Naive Bayes classifier model is bundled directly inside the library using Go's `embed` package, enabling standalone deployment with zero external dependencies.
+- **Language Subsetting**: Restrict language identification to a subset of supported languages, which increases classification accuracy and decreases latency.
+- **Type-Safe Model Format (`.lidg`)**: Deserializes custom trained models into a flat, type-safe binary structure.
+
+---
 
 ## API Reference
 
-### Core Functions
-
+### Core Package-Level Functions
 - `Classify(text string) (Result, error)` - Classifies text using the default lazily-initialized embedded model.
 - `Normalize(results []Result)` - Normalizes log scores in-place into a probability distribution (0.0 to 1.0).
 - `IdentifyFile(path string) (Result, error)` - Identifies the language of a local file using the default model.
@@ -47,9 +60,8 @@ func main() {
 - `LoadModel(path string) (*Identifier, error)` - Loads a custom `.lidg` binary model from the file system.
 
 ### Core Types
-
-- `Result` - Struct containing `Language` (ISO 639-1 code) and its classification `Score` (raw negative log probability, or 0.0-1.0 probability if normalized).
-- `Identifier` - Stateful classification engine. Multiple goroutines can safely invoke its methods concurrently, including language subset updates; in-flight classifications keep using their existing snapshot.
+- `Result` - Struct containing `Language` (ISO 639-1 code) and its classification `Score` (raw negative log-probability, or 0.0-1.0 probability if normalized).
+- `Identifier` - Stateful classification engine. Multiple goroutines can safely invoke its methods concurrently.
   - `(id *Identifier) IdentifyString(text string) (Result, error)`
   - `(id *Identifier) IdentifyBytes(text []byte) (Result, error)`
   - `(id *Identifier) RankString(text string) ([]Result, error)`
@@ -57,10 +69,11 @@ func main() {
   - `(id *Identifier) SetLanguages(langs ...string) error` - Atomically restricts active languages or resets them if nil/empty for future classifications.
   - `(id *Identifier) ResetLanguages()` - Resets active languages to all model-supported classes.
 
+---
+
 ## Common Patterns
 
 ### Subsetting and Normalization
-
 ```go
 id, _ := langid.NewDefaultIdentifier()
 _ = id.SetLanguages("en", "es", "fr") // Restrict to English, Spanish, French
@@ -74,7 +87,6 @@ for _, r := range results[:2] {
 ```
 
 ### Webpage URL Classification
-
 ```go
 package main
 
@@ -97,7 +109,6 @@ func main() {
 ```
 
 ### Self-Hosted HTTP Microservice
-
 ```go
 package main
 
@@ -113,9 +124,7 @@ func main() {
 }
 ```
 
-## Error Handling
-
-- Return errors on model loading (`LoadModel`), if file-reading fails (`IdentifyFile`), or if a language filter contains unsupported languages (`SetLanguages`).
+---
 
 ## References
 
