@@ -11,7 +11,15 @@ import (
 	"strings"
 
 	"github.com/ilpy20/langid-go"
+	"golang.org/x/term"
 )
+
+var isTerminal = func(fd int) bool {
+	if os.Getenv("FORCE_TTY") == "1" {
+		return true
+	}
+	return term.IsTerminal(fd)
+}
 
 func processInput(id *langid.Identifier, data []byte, dist, normalize bool) {
 	if dist {
@@ -378,6 +386,22 @@ func main() {
 				os.Exit(1)
 			}
 		}
+		return
+	}
+
+	if isTerminal(int(os.Stdin.Fd())) {
+		s := bufio.NewScanner(os.Stdin)
+		fmt.Print(">>> ")
+		for s.Scan() {
+			line := s.Bytes()
+			processInput(id, line, actualDist, actualNormalize)
+			fmt.Print(">>> ")
+		}
+		if err := s.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "read stdin: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println()
 		return
 	}
 

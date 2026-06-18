@@ -350,3 +350,93 @@ func TestGoldenBatchLegacy(t *testing.T) {
 	}
 }
 
+func TestInteractiveMode(t *testing.T) {
+	t.Run("standard interactive mode", func(t *testing.T) {
+		cmd := exec.Command("go", "run", "main.go")
+		cmd.Env = append(os.Environ(), "FORCE_TTY=1")
+
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stdin = strings.NewReader("this is a simple english sentence\nceci est une phrase en francais\n")
+
+		err := cmd.Run()
+		if err != nil {
+			t.Fatalf("failed to run interactive mode: %v", err)
+		}
+
+		out := stdout.String()
+		lines := strings.Split(out, "\n")
+
+		if len(lines) < 4 {
+			t.Fatalf("expected at least 4 output lines, got %d:\n%q", len(lines), out)
+		}
+
+		if !strings.HasPrefix(lines[0], ">>> ") || !strings.Contains(lines[0], "'en'") {
+			t.Errorf("expected line 0 to have prompt and classify as english ('en'), got: %q", lines[0])
+		}
+
+		if !strings.HasPrefix(lines[1], ">>> ") || !strings.Contains(lines[1], "'fr'") {
+			t.Errorf("expected line 1 to have prompt and classify as french ('fr'), got: %q", lines[1])
+		}
+
+		if lines[2] != ">>> " {
+			t.Errorf("expected line 2 to be trailing prompt, got: %q", lines[2])
+		}
+
+		if lines[3] != "" {
+			t.Errorf("expected line 3 to be empty after final newline, got: %q", lines[3])
+		}
+	})
+
+	t.Run("normalize interactive mode", func(t *testing.T) {
+		cmd := exec.Command("go", "run", "main.go", "--normalize")
+		cmd.Env = append(os.Environ(), "FORCE_TTY=1")
+
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stdin = strings.NewReader("this is a simple english sentence\n")
+
+		err := cmd.Run()
+		if err != nil {
+			t.Fatalf("failed to run interactive mode with normalize: %v", err)
+		}
+
+		out := stdout.String()
+		lines := strings.Split(out, "\n")
+
+		if len(lines) < 3 {
+			t.Fatalf("expected at least 3 output lines, got %d:\n%q", len(lines), out)
+		}
+
+		if !strings.HasPrefix(lines[0], ">>> ") || !strings.Contains(lines[0], "'en'") || !strings.Contains(lines[0], "1.0000") {
+			t.Errorf("expected line 0 to have prompt, 'en' classification, and normalized score (e.g. 1.0000), got: %q", lines[0])
+		}
+	})
+
+	t.Run("dist interactive mode", func(t *testing.T) {
+		cmd := exec.Command("go", "run", "main.go", "--dist")
+		cmd.Env = append(os.Environ(), "FORCE_TTY=1")
+
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stdin = strings.NewReader("this is a simple english sentence\n")
+
+		err := cmd.Run()
+		if err != nil {
+			t.Fatalf("failed to run interactive mode with dist: %v", err)
+		}
+
+		out := stdout.String()
+		lines := strings.Split(out, "\n")
+
+		if len(lines) < 3 {
+			t.Fatalf("expected at least 3 output lines, got %d:\n%q", len(lines), out)
+		}
+
+		if !strings.HasPrefix(lines[0], ">>> ") || !strings.Contains(lines[0], "[") || !strings.Contains(lines[0], "]") {
+			t.Errorf("expected line 0 to print full ranking brackets, got: %q", lines[0])
+		}
+	})
+}
+
+
