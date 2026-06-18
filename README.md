@@ -4,6 +4,15 @@
 
 Like the originals, it comes pre-trained on 97 languages and is virtually insensitive to domain-specific features (e.g. HTML/XML markup). By leveraging Go's concurrency primitives (`sync.Pool`) and a flat-array "sparse set" architecture borrowed from `langid.c`, this port achieves **zero-allocation inference** on the hot loop, making it extremely fast and suitable for high-throughput stream processing.
 
+## Background & Motivation
+
+In building production-grade language classification pipelines in Go, developers face significant gaps in the native NLP ecosystem:
+- **Limitations of `lingua-go`**: While feature-rich, the popular `lingua-go` library has been largely abandoned for years. Operationally, it suffers from severe bugs when processing short texts, where it frequently misclassifies inputs and returns random or incorrect languages. It also introduces high computational and memory overhead.
+- **Limitations of `whatlanggo`**: While extremely fast, `whatlanggo` supports a limited set of languages and formats its output exclusively in ISO 639-3 (three-letter codes), which is incompatible with downstream pipelines that require standard ISO 639-1 two-letter codes.
+- **Fragility of CGO Wrappers**: Previous attempts to bring the proven, robust Naive Bayes algorithm of `langid` to Go relied entirely on fragile CGO bindings (such as [dbalan/langid_go](https://github.com/dbalan/langid_go) wrapping `langid.c`). CGO introduces severe runtime thread overhead, interferes with Go's garbage collector and memory tracking, and complicates cross-compilation.
+
+**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** that achieves exact mathematical parity with the original Python unpickler and Naive Bayes vector engine, while running with **zero allocations** in standard concurrency-safe hot paths.
+
 ## Features
 
 - **Pre-trained on 97 languages** (ISO 639-1 codes).
@@ -12,6 +21,31 @@ Like the originals, it comes pre-trained on 97 languages and is virtually insens
 - **Language Subsetting:** Restrict predictions to a known subset of languages for improved accuracy and speed.
 - **Probability Normalization:** Output standardized probabilities (0.0 - 1.0) rather than raw log-scores.
 - **Versatile CLI:** Includes interactive, batch, and stream modes.
+- **CGO-Free:** 100% pure Go, guaranteeing simple cross-compilation and native GC performance.
+
+## Compatibility Matrix
+
+`langid-go` has been designed as a fully-featured, production-ready superset of the original ecosystem libraries:
+
+| Feature | langid.py | langid.c | langid.js | langid-go |
+| --- | --- | --- | --- | --- |
+| **Default 97-language model** | yes | yes | yes | **yes** |
+| **Custom model loading** | yes | yes | via generated JS | **yes (via `.lidg` binary)** |
+| **Classify text** | yes | yes | yes | **yes** |
+| **Return raw log-score** | yes | no | yes (as ranks) | **yes** |
+| **Rank all languages** | yes | no | yes | **yes** |
+| **Normalize probabilities** | yes | no | no | **yes** |
+| **Language subsetting** | yes | no | no | **yes** |
+| **Reset language subset** | yes | no | no | **yes** |
+| **File helper API** | yes | CLI only | no | **yes** |
+| **CLI document mode** | yes | yes | no | **yes** |
+| **CLI line mode** | yes | yes | no | **yes** |
+| **CLI batch mode** | yes | yes | no | **yes** |
+| **Python-compatible flags** | yes | partial | no | **yes** |
+| **URL classification** | yes | no | no | **yes** |
+| **HTTP service mode** | yes | no | no | **yes** |
+| **Web browser demo** | yes | no | yes | **yes** |
+| **Training tools** | yes | no | no | *Planned Future Feature (TODO)* |
 
 ## Library Usage
 
