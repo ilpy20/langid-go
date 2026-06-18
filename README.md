@@ -2,9 +2,17 @@
 
 # langid-go
 
-**`langid-go`** is a high-performance Go port of the popular language identification tool [langid.py](https://github.com/saffsd/langid.py) and its C counterpart [langid.c](https://github.com/saffsd/langid.c). 
+**`langid-go`** is a high-performance Go port of the `langid` inference/runtime stack, initially ported from [langid.c](https://github.com/saffsd/langid.c) and later expanded for feature and parity coverage against [langid.js](https://github.com/saffsd/langid.js) and [langid.py](https://github.com/saffsd/langid.py).
 
 Like the originals, it comes pre-trained on 97 languages and is virtually insensitive to domain-specific features (e.g. HTML/XML markup). By leveraging Go's concurrency primitives (`sync.Pool`) and a flat-array "sparse set" architecture borrowed from `langid.c`, this port achieves **zero-allocation inference** on the hot loop, making it extremely fast and suitable for high-throughput stream processing.
+
+## Port Lineage and Scope
+
+`langid-go` ports the runtime classifier and model execution path only:
+
+- **Initial port:** [langid.c](https://github.com/saffsd/langid.c), including the flat-array DFA/sparse-set runtime approach.
+- **Parity references:** [langid.js](https://github.com/saffsd/langid.js) and [langid.py](https://github.com/saffsd/langid.py), used for API behavior, ranking, normalization, language subsetting, service behavior, and model compatibility checks.
+- **Out of scope today:** the original `langid.py` training pipeline. Custom models should be trained with the reference Python tools and converted to `.lidg` using `scripts/convert_model.py`.
 
 ## Background & Motivation
 
@@ -22,17 +30,17 @@ In building production-grade language classification pipelines in Go, developers
 
 - **Fragility of CGO Wrappers**: Previous attempts to bring the proven, robust Naive Bayes algorithm of `langid` to Go relied entirely on fragile CGO bindings (such as [dbalan/langid_go](https://github.com/dbalan/langid_go) wrapping `langid.c`). CGO introduces severe runtime thread overhead, interferes with Go's garbage collector and memory tracking, and complicates cross-compilation.
 
-**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** that achieves exact mathematical parity with the original Python unpickler and Naive Bayes vector engine, while running with **zero allocations** in standard concurrency-safe hot paths.
+**`langid-go`** solves these issues by offering a **pure, 100% Go implementation** of the runtime classifier that achieves exact mathematical parity with the original Naive Bayes/DFA inference engine, while running with **zero allocations** in standard concurrency-safe hot paths. It does not currently reimplement the original training pipeline.
 
 ### Why this architecture is critical for modern LLM Chatbots and AI Agents:
 - **Robustness to Messy, Short Inputs**: LLM chatbot prompts and agent instructions are notoriously short, fragmented, and noisy. They are heavily polluted with brand names, technical jargon, code syntax, mixed scripts, and emojis. Because `langid` utilizes a Naive Bayes classifier trained via cross-domain Information Gain (IG) feature selection, it remains virtually immune to these domain-specific artifacts, avoiding the random misclassifications that plague traditional character-distance models.
 - **Embedded & Zero-Allocation**: Running language classification via external microservices or heavy Python dependencies introduces unacceptable latency into real-time chatbot routing. `langid-go` embeds the model directly via `go:embed` and performs inference with zero garbage collection overhead on the hot path, making it perfect for high-throughput LLM gateway routing.
-- **Model Portability & Future Native Training**: While other libraries bundle black-box models or bloat repositories with static test data, `langid-go` provides a clean pipeline for loading custom `.lidg` binary models. In addition, its [roadmap](./TODO.md) includes native Go-native training, enabling developers to build and adapt language classification models dynamically within their Go agent runtimes.
+- **Model Portability & Future Native Training**: While other libraries bundle black-box models or bloat repositories with static test data, `langid-go` provides a clean pipeline for loading custom `.lidg` binary models. In addition, its [roadmap](./TODO.md) includes Go-native training, enabling developers to build and adapt language classification models dynamically within their Go agent runtimes.
 
 ## Features
 
 - **Pre-trained on 97 languages** (ISO 639-1 codes).
-- **Embedded Model:** Zero dependencies. The default model is compiled directly into the binary via `go:embed`.
+- **Embedded Model:** The library package has no external runtime dependencies. The default model is compiled directly into the binary via `go:embed`. The CLI adds `golang.org/x/term` and `golang.org/x/sys`.
 - **Zero-Allocation Inference:** Highly optimized engine minimizes garbage collection overhead.
 - **Language Subsetting:** Restrict predictions to a known subset of languages for improved accuracy and speed.
 - **Probability Normalization:** Output standardized probabilities (0.0 - 1.0) rather than raw log-scores.
@@ -128,6 +136,7 @@ func main() {
 
 > [!NOTE]
 > You can restore the full language list at any time by calling `id.ResetLanguages()` or invoking `id.SetLanguages()` with empty/no arguments.
+> Subset changes are atomic for future classifications; in-flight calls continue on the snapshot they already started with.
 
 ### File Helper APIs
 
@@ -227,6 +236,8 @@ Usage of langid:
     	output format for batch mode: classic, csv, or jsonl (default "classic")
       --ignore-missing
     	silently skip missing or unreadable files in batch mode
+      --max-bytes int
+    	maximum bytes read per stdin, file, request, or URL body (default 4194304)
       --serve
     	start HTTP service mode
       --demo
@@ -314,6 +325,9 @@ Expose language identification as an HTTP microservice:
 # Starts service locally
 ./langid --serve --port 9008
 
+# Starts service on an outward-facing interface if one can be discovered
+./langid --serve --remote
+
 # Starts service and opens the interactive jQuery sandbox demo in your default browser
 ./langid --demo
 ```
@@ -352,7 +366,7 @@ Expose language identification as an HTTP microservice:
 ## Model Training & Customization
 
 ### Scope and Decisions
-`langid-go` is designed as a **high-speed, highly concurrent, zero-allocation inference engine**. To keep the Go package optimized, secure, and free from external runtime dependencies or floating-point precision drift, the following architectural choices have been made:
+`langid-go` is designed as a **high-speed, highly concurrent, zero-allocation inference engine**. It ports the classifier runtime and model execution path, not the original training toolchain. To keep the Go package optimized, secure, and free from external runtime dependencies or floating-point precision drift, the following architectural choices have been made:
 - **Go-Native Training is a Planned Future Feature (TODO)**: Model training requires a multi-stage statistical pipeline (corpus indexing, byte-level sliding window tokenization, Shannon information-gain calculations, n-gram optimization, and Aho-Corasick DFA state-machine construction). The reference `langid.py` implementation utilizes the Python scientific stack (`numpy` and `scipy`) for these calculations. Implementing a native Go training pipeline remains a planned future feature (TODO) once suitable Go NLP, matrix computation, or scanner compiling libraries are identified.
 - **Direct Legacy Model Loading (`.model` files) is Out of Scope**: Original models produced by Python are base64-encoded, bz2-compressed Python 2 `pickle` files. Reading Python pickles directly in Go is fragile, insecure, and computationally expensive.
 
