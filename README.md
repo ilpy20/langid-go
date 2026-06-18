@@ -91,7 +91,8 @@ func main() {
 
 	// 1. Restrict the language set 
 	// This drastically improves accuracy and speed if your domain is known.
-	id.KeepOnly("en", "fr", "es", "de", "it")
+	// Use SetLanguages(...) instead of the deprecated KeepOnly(...)
+	id.SetLanguages("en", "fr", "es", "de", "it")
 
 	// 2. Rank all languages instead of just returning the best match
 	results, _ := id.RankString("Bonjour tout le monde")
@@ -109,9 +110,80 @@ func main() {
 }
 ```
 
+> [!NOTE]
+> You can restore the full language list at any time by calling `id.ResetLanguages()` or invoking `id.SetLanguages()` with empty/no arguments.
+
+### File Helper APIs
+
+`langid-go` provides optimized native file-reading classification helpers at both the package and instance levels, ensuring clean error propagation:
+
+```go
+// Package-level helpers (uses default embedded model)
+res, err := langid.IdentifyFile("document.txt")
+results, err := langid.RankFile("document.txt")
+
+// Instance-level helpers
+res, err := id.IdentifyFile("document.txt")
+results, err := id.RankFile("document.txt")
+```
+
+### URL Classification API
+
+The `urlclass` package provides a programmatic client to fetch and classify the text contents of standard web pages with automatic timeout management:
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/ilpy20/langid-go"
+	"github.com/ilpy20/langid-go/urlclass"
+)
+
+func main() {
+	id, _ := langid.NewDefaultIdentifier()
+	client := urlclass.NewClient(id)
+
+	// Fetch a URL and classify its language with a 5-second timeout
+	res, bytesFetched, err := client.ClassifyURL("https://example.com", 5*time.Second)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Fetched %d bytes. Language: %s (Log Score: %.2f)\n", bytesFetched, res.Language, res.Score)
+}
+```
+
+### HTTP Service API
+
+The `service` package provides a highly-concurrent HTTP router and server wrapping `langid` for exposing classification over REST endpoints or hosting an interactive local sandbox:
+
+```go
+package main
+
+import (
+	"github.com/ilpy20/langid-go"
+	"github.com/ilpy20/langid-go/service"
+)
+
+func main() {
+	id, _ := langid.NewDefaultIdentifier()
+	srv := service.NewServer(id)
+
+	// Starts an HTTP server on http://localhost:9008
+	if err := srv.Start("127.0.0.1", 9008); err != nil {
+		panic(err)
+	}
+}
+```
+
+---
+
 ## CLI Usage
 
-`langid.go` provides a powerful command-line interface matching the functionality of the Python and C versions.
+`langid` provides a powerful pure-Go command-line interface fully backwards-compatible with the original Python and C versions, while introducing advanced modern tooling.
 
 ### Build
 
@@ -135,34 +207,131 @@ Usage of langid:
     	show full distribution over languages (rank mode)
   -n, --normalize
     	normalize confidence scores to probability values (0.0 to 1.0)
+  -f, --format string
+    	output format for batch mode: classic, csv, or jsonl (default "classic")
+      --ignore-missing
+    	silently skip missing or unreadable files in batch mode
+      --serve
+    	start HTTP service mode
+      --demo
+    	start HTTP service mode and open demo page in web browser
+      --host string
+    	host to bind HTTP service to (default "127.0.0.1")
+      --port int
+    	port to bind HTTP service to (default 9008)
+  -u, --url string
+    	classify the content of a URL
 ```
 
-### Examples
+### Modes of Operation
 
-**Interactive / Standard Mode:**
+#### 1. Standard / Pipe Mode
+Process a single document from standard input.
 ```bash
 $ ./langid -n <<< "Hello World"
 ('en', 1.0000)
 ```
 
-**Line Mode (`--line` or `-l`):** Process pipes line-by-line rather than as a single document.
+#### 2. Interactive REPL Mode
+Running `./langid` with standard input attached to a terminal automatically boots an interactive shell.
+```bash
+$ ./langid -n
+>>> Hello World
+('en', 1.0000)
+>>> Bonjour tout le monde
+('fr', 1.0000)
+```
+
+#### 3. Line Mode (`--line`)
+Process standard input line-by-line, treating each as a distinct classification job.
 ```bash
 $ printf "hello world\nbonjour tout le monde\n" | ./langid --line
 ('en', -102.5)
 ('fr', -105.1)
 ```
 
-**Batch Mode (`-b` / `--batch`):** Treat lines as file paths, processing them in bulk. Useful with UNIX tools like `find`.
+#### 4. Batch Mode (`-b` / `--batch` / `-f` / `--format`)
+Treat inputs as file paths, processing them in bulk. Files can be passed directly as command-line arguments, falling back to reading paths from stdin if none are specified.
+
+##### Output Formats (`--format classic | csv | jsonl`)
+* **`classic` (default)**: Prints `path,('lang', score)`
+* **`csv`**:
+  * In standard mode, outputs: `path,lang,score` (no header)
+  * In distribution mode (`-d`), outputs a header row followed by scores for all supported columns:
+    ```text
+    path,en,fr,es,de,...
+    file1.txt,-105.1,-240.2,...
+    ```
+* **`jsonl`**:
+  * In standard mode:
+    ```json
+    {"path":"file1.txt","language":"en","confidence":-105.1}
+    ```
+  * In distribution mode (`-d`):
+    ```json
+    {"path":"file1.txt","ranking":[{"language":"en","score":-105.1},{"language":"fr","score":-240.2},...]}
+    ```
+
+##### Command Examples:
 ```bash
-$ find . -name "*.md" | ./langid -b -n
-./README.md,('en', 1.0000)
+# Pass files directly as arguments
+./langid --batch --format csv file1.txt file2.txt
+
+# Pipe file lists from Unix utilities
+find . -name "*.md" | ./langid -b -n --format jsonl
+
+# Ignore missing/unreadable files (instead of returning "NOSUCHFILE")
+./langid --batch --ignore-missing file1.txt missing_file.txt
 ```
 
-**Language Subsetting (`-l` / `--langs`):**
+#### 5. URL Classification (`-u` / `--url`)
+Directly retrieve and classify webpage contents from the command line:
 ```bash
-$ ./langid -n -l en,it <<< "Io non parlo italiano"
-('it', 1.0000)
+$ ./langid --url "https://example.com" -n
+https://example.com 1256 ('en', 1.0000)
 ```
+*(Outputs the target URL, the response body length in bytes, and the predicted language metadata).*
+
+#### 6. HTTP Server & Web Demo Mode (`--serve` / `--demo`)
+Expose language identification as an HTTP microservice:
+```bash
+# Starts service locally
+./langid --serve --port 9008
+
+# Starts service and opens the interactive jQuery sandbox demo in your default browser
+./langid --demo
+```
+
+##### API Specifications:
+* **`POST /detect`** or **`GET /detect?q=<text>`**: Predict the language.
+  * Request Body: Raw text or standard `application/x-www-form-urlencoded` string containing parameter `q`.
+  * Response Envelope:
+    ```json
+    {
+      "responseData": {
+        "language": "en",
+        "confidence": 1.0
+      },
+      "responseDetails": null,
+      "responseStatus": 200
+    }
+    ```
+* **`POST /rank`** or **`GET /rank?q=<text>`**: Retrieve full confidence list.
+  * Response Envelope:
+    ```json
+    {
+      "responseData": [
+        ["en", 1.0],
+        ["fr", 0.0],
+        ["es", 0.0]
+      ],
+      "responseDetails": null,
+      "responseStatus": 200
+    }
+    ```
+* **`GET /demo`**: Returns the interactive web UI sandbox.
+
+---
 
 ## Model Training & Customization
 
