@@ -3,8 +3,8 @@ package urlclass
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -12,29 +12,36 @@ import (
 	"github.com/ilpy20/langid-go"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func TestURLClassifyAndRank(t *testing.T) {
-	// Initialize the default identifier for testing
 	id, err := langid.NewDefaultIdentifier()
 	if err != nil {
 		t.Fatalf("failed to load default identifier: %v", err)
 	}
 
-	client := NewClient(id)
-
-	// Distinct German phrase to ensure consistent Naive Bayes classification as "de"
 	testContent := "Guten Tag, wie geht es Ihnen? Alles ist wunderbar hier."
 	expectedLength := len(testContent)
 
-	// Create a test server that returns German content
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(testContent))
-	}))
-	defer server.Close()
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader(testContent)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+	client := NewClientWithHTTPClient(id, httpClient)
 
 	t.Run("ClassifyURL Success", func(t *testing.T) {
-		res, length, err := client.ClassifyURL(server.URL, 5*time.Second)
+		res, length, err := client.ClassifyURL("https://example.com", 5*time.Second)
 		if err != nil {
 			t.Fatalf("unexpected error in ClassifyURL: %v", err)
 		}
@@ -47,7 +54,7 @@ func TestURLClassifyAndRank(t *testing.T) {
 	})
 
 	t.Run("RankURL Success", func(t *testing.T) {
-		results, length, err := client.RankURL(server.URL, 5*time.Second)
+		results, length, err := client.RankURL("https://example.com", 5*time.Second)
 		if err != nil {
 			t.Fatalf("unexpected error in RankURL: %v", err)
 		}
@@ -69,16 +76,20 @@ func TestURLClassifyErrors(t *testing.T) {
 		t.Fatalf("failed to load default identifier: %v", err)
 	}
 
-	client := NewClient(id)
-
 	t.Run("HTTP Non-200 Status", func(t *testing.T) {
-		// Test server returning a 404 status
-		errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNotFound)
-		}))
-		defer errServer.Close()
+		client := NewClientWithHTTPClient(id, &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Status:     "404 Not Found",
+					Body:       io.NopCloser(strings.NewReader("")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		})
 
-		_, _, err := client.ClassifyURL(errServer.URL, 5*time.Second)
+		_, _, err := client.ClassifyURL("https://example.com", 5*time.Second)
 		if err == nil {
 			t.Fatal("expected error for non-200 status, got nil")
 		}
@@ -87,29 +98,56 @@ func TestURLClassifyErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("Unreachable Host", func(t *testing.T) {
-		// Connect to an invalid address/port that is guaranteed to fail
-		_, _, err := client.ClassifyURL("http://invalid.local-unreachable-domain.xyz", 1*time.Second)
+	t.Run("Transport Error", func(t *testing.T) {
+		client := NewClientWithHTTPClient(id, &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, errors.New("dial failed")
+			}),
+		})
+
+		_, _, err := client.ClassifyURL("https://example.com", time.Second)
 		if err == nil {
-			t.Fatal("expected error for unreachable host, got nil")
+			t.Fatal("expected transport error, got nil")
 		}
 	})
 
 	t.Run("Timeout Behavior", func(t *testing.T) {
-		// Create a slow server that delays response beyond timeout limit
-		slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(100 * time.Millisecond)
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer slowServer.Close()
+		client := NewClientWithHTTPClient(id, &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}),
+		})
 
-		// Request with extremely short timeout of 10ms
-		_, _, err := client.ClassifyURL(slowServer.URL, 10*time.Millisecond)
+		_, _, err := client.ClassifyURL("https://example.com", 10*time.Millisecond)
 		if err == nil {
 			t.Fatal("expected timeout error, got nil")
 		}
-		if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "Client.Timeout exceeded") && !strings.Contains(err.Error(), "deadline exceeded") {
+		if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline exceeded") {
 			t.Errorf("expected timeout/deadline exceeded error, got: %v", err)
+		}
+	})
+
+	t.Run("Response Too Large", func(t *testing.T) {
+		client := NewClientWithHTTPClient(id, &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader("hello")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		})
+		client.SetMaxResponseBytes(4)
+
+		_, _, err := client.ClassifyURL("https://example.com", time.Second)
+		if err == nil {
+			t.Fatal("expected size limit error, got nil")
+		}
+		if !strings.Contains(err.Error(), "exceeds 4 bytes") {
+			t.Errorf("expected size limit error, got %v", err)
 		}
 	})
 }
