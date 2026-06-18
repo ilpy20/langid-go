@@ -1,10 +1,10 @@
 # langid-go
 
-> Pure Go zero-dependency natural language identifier with support for 97 languages. Port of langid.c and langid.py.
+> Pure Go natural language identifier library with support for 97 languages. Runtime port initially derived from langid.c, then expanded against langid.js and langid.py. Training pipeline not included.
 
 ## Overview
 
-`langid-go` is a high-performance Go language identification library and CLI tool. It is pre-trained on 97 languages, guarantees exact mathematical parity with the original Naive Bayes/DFA engine of `langid.py`, and features a zero-allocation inference hot-loop utilizing a flat-array "sparse set" architecture borrowed from `langid.c`. It is completely CGO-free and suitable for high-throughput stream processing.
+`langid-go` is a high-performance Go language identification library and CLI tool. It is pre-trained on 97 languages, guarantees exact mathematical parity with the original Naive Bayes/DFA inference engine, and features a zero-allocation inference hot-loop utilizing a flat-array "sparse set" architecture borrowed from `langid.c`. Its implementation lineage is `langid.c` first, then feature/parity work from `langid.js` and `langid.py`. It is completely CGO-free and suitable for high-throughput stream processing.
 
 ## Quick Start
 
@@ -49,12 +49,12 @@ func main() {
 ### Core Types
 
 - `Result` - Struct containing `Language` (ISO 639-1 code) and its classification `Score` (raw negative log probability, or 0.0-1.0 probability if normalized).
-- `Identifier` - Stateful classification engine. Multiple goroutines can safely invoke its methods concurrently.
+- `Identifier` - Stateful classification engine. Multiple goroutines can safely invoke its methods concurrently, including language subset updates; in-flight classifications keep using their existing snapshot.
   - `(id *Identifier) IdentifyString(text string) (Result, error)`
   - `(id *Identifier) IdentifyBytes(text []byte) (Result, error)`
   - `(id *Identifier) RankString(text string) ([]Result, error)`
   - `(id *Identifier) RankBytes(text []byte) ([]Result, error)`
-  - `(id *Identifier) SetLanguages(langs ...string) error` - Atomically restricts active languages or resets them if nil/empty.
+  - `(id *Identifier) SetLanguages(langs ...string) error` - Atomically restricts active languages or resets them if nil/empty for future classifications.
   - `(id *Identifier) ResetLanguages()` - Resets active languages to all model-supported classes.
 
 ## Common Patterns
