@@ -1,3 +1,5 @@
+[![Go Reference](https://pkg.go.dev/badge/github.com/ilpy20/langid-go.svg)](https://pkg.go.dev/github.com/ilpy20/langid-go)
+
 # langid-go
 
 **`langid-go`** is a high-performance Go port of the popular language identification tool [langid.py](https://github.com/saffsd/langid.py) and its C counterpart [langid.c](https://github.com/saffsd/langid.c). 
