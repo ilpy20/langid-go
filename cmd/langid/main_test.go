@@ -207,6 +207,34 @@ func TestBatchMode(t *testing.T) {
 			t.Errorf("expected second line to contain french.txt, got: %q", lines[1])
 		}
 	})
+
+	t.Run("command arguments", func(t *testing.T) {
+		// Run with english.txt and french.txt as command arguments, and pass an invalid path on stdin.
+		// If it reads command arguments, it should successfully process english.txt and french.txt and NOT process stdin.
+		cmdArgs := []string{"run", "main.go", "--batch", engFile, fraFile}
+		cmd := exec.Command("go", cmdArgs...)
+		cmd.Stdin = strings.NewReader(missingFile + "\n")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		if err != nil {
+			t.Fatalf("run cmd failed: %v, stderr: %q", err, stderr.String())
+		}
+
+		out := stdout.String()
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		// We expect 2 output lines corresponding to engFile and fraFile, and NO missingFile (since missingFile is on stdin, which should be ignored).
+		if len(lines) != 2 {
+			t.Errorf("expected 2 lines of output, got %d:\n%s", len(lines), out)
+		}
+		if !strings.Contains(lines[0], "english.txt,('en',") {
+			t.Errorf("expected english.txt to be classified as 'en' from command args, got: %q", lines[0])
+		}
+		if !strings.Contains(lines[1], "french.txt,('fr',") {
+			t.Errorf("expected french.txt to be classified as 'fr' from command args, got: %q", lines[1])
+		}
+	})
 }
 
 func TestGoldenBatchLegacy(t *testing.T) {

@@ -200,16 +200,15 @@ func main() {
 			}
 		}
 
-		s := bufio.NewScanner(os.Stdin)
-		for s.Scan() {
-			path := strings.TrimSpace(s.Text())
+		processPath := func(path string) {
+			path = strings.TrimSpace(path)
 			if path == "" {
-				continue
+				return
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				if ignoreMissing {
-					continue
+					return
 				}
 				if actualFormat == "csv" {
 					if actualDist {
@@ -225,7 +224,7 @@ func main() {
 				} else {
 					fmt.Printf("%s,NOSUCHFILE\n", path)
 				}
-				continue
+				return
 			}
 
 			switch actualFormat {
@@ -234,7 +233,7 @@ func main() {
 					results, err := id.RankBytes(data)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "rank: %v\n", err)
-						continue
+						return
 					}
 					if actualNormalize {
 						langid.Normalize(results)
@@ -260,7 +259,7 @@ func main() {
 						results, err := id.RankBytes(data)
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "rank: %v\n", err)
-							continue
+							return
 						}
 						langid.Normalize(results)
 						lang = results[0].Language
@@ -269,7 +268,7 @@ func main() {
 						res, err := id.IdentifyBytes(data)
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "classify: %v\n", err)
-							continue
+							return
 						}
 						lang = res.Language
 						confidence = res.Score
@@ -289,7 +288,7 @@ func main() {
 					results, err := id.RankBytes(data)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "rank: %v\n", err)
-						continue
+						return
 					}
 					if actualNormalize {
 						langid.Normalize(results)
@@ -316,7 +315,7 @@ func main() {
 					b, err := json.Marshal(row)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "json marshal: %v\n", err)
-						continue
+						return
 					}
 					fmt.Println(string(b))
 				} else {
@@ -326,7 +325,7 @@ func main() {
 						results, err := id.RankBytes(data)
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "rank: %v\n", err)
-							continue
+							return
 						}
 						langid.Normalize(results)
 						lang = results[0].Language
@@ -335,7 +334,7 @@ func main() {
 						res, err := id.IdentifyBytes(data)
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "classify: %v\n", err)
-							continue
+							return
 						}
 						lang = res.Language
 						confidence = res.Score
@@ -354,7 +353,7 @@ func main() {
 					b, err := json.Marshal(row)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "json marshal: %v\n", err)
-						continue
+						return
 					}
 					fmt.Println(string(b))
 				}
@@ -364,9 +363,20 @@ func main() {
 				processInput(id, data, actualDist, actualNormalize)
 			}
 		}
-		if err := s.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "read stdin: %v\n", err)
-			os.Exit(1)
+
+		if flag.NArg() > 0 {
+			for _, path := range flag.Args() {
+				processPath(path)
+			}
+		} else {
+			s := bufio.NewScanner(os.Stdin)
+			for s.Scan() {
+				processPath(s.Text())
+			}
+			if err := s.Err(); err != nil {
+				fmt.Fprintf(os.Stderr, "read stdin: %v\n", err)
+				os.Exit(1)
+			}
 		}
 		return
 	}
